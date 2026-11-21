@@ -46,19 +46,71 @@ struct MessageRow: Equatable {
     var action: ActionCard? = nil
     /// The AI agent's name, on its messages; nil for people.
     var aiName: String? = nil
-    /// "Penny · AI" above the first message of a run from the AI.
+    /// Who on the team wrote it, shown like a person in a group chat; nil
+    /// for the user's own messages.
+    var sender: RowSender? = nil
+    /// The sender's name above the first message of a run from them.
     var senderLabel: String? = nil
+    /// "AI" after the AI's name in the group chat look.
+    var senderBadge: String? = nil
+    /// The sender's avatar beside the last message of a run (group chat look).
+    var showsAvatar = false
+    /// Incoming bubbles leave room for avatars (group chat look).
+    var avatarColumn = false
+
+    /// The bubble's tail, like Messages: only on the last bubble of a run.
+    var showsTail: Bool { !groupedWithNext }
+}
+
+/// A person on the team as the thread shows them: a teammate, the AI agent,
+/// or the team as a whole (campaigns, system messages, older servers).
+struct RowSender: Hashable {
+    /// The member's ID, `ai`, or empty for the team as a whole.
+    var id: String
+    var name: String?
+    var avatarURL: URL?
+    var isAI: Bool
+
+    /// Initials for an avatar without an image: up to two letters.
+    var initials: String {
+        let words = (name ?? "").split(whereSeparator: \.isWhitespace).prefix(2)
+        return words.compactMap { $0.first.map { String($0).uppercased() } }.joined()
+    }
+
+    init(id: String, name: String?, avatarURL: URL?, isAI: Bool) {
+        self.id = id
+        self.name = name
+        self.avatarURL = avatarURL
+        self.isAI = isAI
+    }
+
+    /// The sender of a team message; the AI is one person even from servers
+    /// that only send its name.
+    init(_ message: Message) {
+        if let sender = message.sender {
+            self.init(
+                id: sender.id, name: sender.name ?? (message.senderType == .aiAgent ? message.senderName : nil),
+                avatarURL: sender.avatarURL, isAI: message.senderType == .aiAgent)
+        } else if message.senderType == .aiAgent {
+            self.init(id: "ai", name: message.senderName, avatarURL: nil, isAI: true)
+        } else {
+            self.init(id: "", name: nil, avatarURL: nil, isAI: false)
+        }
+    }
 }
 
 /// An image in a bubble: a sent attachment or the local bytes of an unsent one.
 enum ImageRef: Hashable {
     case attachment(Attachment)
     case local(key: String, width: Int, height: Int)
+    /// An image on the web, such as an avatar.
+    case remote(URL)
 
     var cacheKey: String {
         switch self {
         case .attachment(let a): "a:\(a.id)"
         case .local(let key, _, _): "l:\(key)"
+        case .remote(let url): "u:\(url.absoluteString)"
         }
     }
 
@@ -66,6 +118,7 @@ enum ImageRef: Hashable {
         switch self {
         case .attachment(let a): CGSize(width: a.width, height: a.height)
         case .local(_, let w, let h): CGSize(width: w, height: h)
+        case .remote: .zero
         }
     }
 }
@@ -77,6 +130,9 @@ struct ThreadModel {
     var separators: [String: Separator] = [:]
     /// Rows by the server's message ID, for jumping to a quoted message.
     var itemsByMessageId: [String: ThreadItemID] = [:]
+    /// The people on the team who wrote in this thread, most recent last
+    /// (the group chat title). Empty without the group chat look.
+    var participants: [RowSender] = []
 
     struct Separator: Equatable {
         /// "Today", "Yesterday", "Monday" or a date, shown in bold.
@@ -97,7 +153,7 @@ struct ThreadModel {
     init(
         state: ConversationStore.State, calendar: Calendar, strings: ChatStrings, now: Date,
         unreadAfter: Int? = nil, showsReadReceipts: Bool = true, showsTypingIndicator: Bool = true,
-        hiddenActions: Set<String> = []
+        hiddenActions: Set<String> = [], showsSenders: Bool = false
     ) {
         if state.hasOlderMessages { items.append(.loadingOlder) }
         let agentRead = state.conversation?.agentRead ?? 0
@@ -122,7 +178,9 @@ struct ThreadModel {
                     status: status, groupedWithNext: false, reactions: message.reactions, replyTo: message.replyTo,
                     action: message.senderType.isEndUser || hiddenActions.contains(message.id)
                         ? nil : message.action.flatMap { ActionCard($0, strings: strings) },
-                    aiName: message.senderType == .aiAgent ? (message.senderName ?? "") : nil)
+                    aiName: message.senderType == .aiAgent ? (message.senderName ?? "") : nil,
+                    sender: message.senderType.isEndUser ? nil : RowSender(message),
+                    avatarColumn: showsSenders && !message.senderType.isEndUser)
             ))
         }
         // Unsent messages go where they were written, so one that failed
@@ -172,27 +230,48 @@ struct ThreadModel {
             previousDate = date
             if entry.row.key == firstUnreadKey { items.append(.unreadDivider) }
             var row = entry.row
-            // The AI's name goes above the first message of each run of its messages.
-            if let name = row.aiName, !previousGrouped {
-                row.senderLabel = String(format: strings("sender.ai"), name.isEmpty ? strings("a11y.from_team") : name)
+            if !previousGrouped {
+                if showsSenders, let sender = row.sender, let name = sender.name, !name.isEmpty {
+                    // A group chat: each person's name above the first message of their run.
+                    row.senderLabel = name
+                    if sender.isAI { row.senderBadge = strings("sender.ai_badge") }
+                } else if let name = row.aiName {
+                    // Otherwise only the AI is named ("Penny · AI").
+                    row.senderLabel = String(
+                        format: strings("sender.ai"), name.isEmpty ? strings("a11y.from_team") : name)
+                }
             }
             if index + 1 < entries.count {
                 let next = entries[index + 1].row
-                // A switch between the AI and a person starts a new group.
+                // A different person, or a switch between the AI and a person, starts a new group.
                 row.groupedWithNext = next.isOutgoing == row.isOutgoing
                     && (next.aiName == nil) == (row.aiName == nil)
+                    && (!showsSenders || next.sender?.id == row.sender?.id)
                     && calendar.isDate(next.createdAt, inSameDayAs: date)
                     && next.createdAt.timeIntervalSince(date) < 120
                     && next.key != firstUnreadKey
             } else {
                 row.groupedWithNext = false
             }
+            row.showsAvatar = row.avatarColumn && !row.groupedWithNext
             previousGrouped = row.groupedWithNext
             items.append(entry.id)
             rows[entry.id] = row
             if let messageId = row.messageId { itemsByMessageId[messageId] = entry.id }
         }
         if state.teamIsTyping, showsTypingIndicator { items.append(.typing) }
+        if showsSenders {
+            // Each person once, at their latest message; the team as a whole isn't a person.
+            var latest: [String: Int] = [:]
+            var people: [String: RowSender] = [:]
+            for (index, message) in state.messages.enumerated() where !message.senderType.isEndUser {
+                let sender = RowSender(message)
+                guard !sender.id.isEmpty else { continue }
+                latest[sender.id] = index
+                people[sender.id] = sender
+            }
+            participants = latest.sorted { $0.value < $1.value }.compactMap { people[$0.key] }
+        }
     }
 
     static func separator(

@@ -45,3 +45,6 @@
 "card.no_subscription" = "No se encontró ninguna suscripción activa de esta app en esta cuenta de Apple.";
 "action.ok" = "OK";
 "sender.ai" = "%@ · IA";
+"sender.ai_badge" = "IA";
+"header.people" = "%@ · %d personas";
+"a11y.people" = "Personas en este chat";

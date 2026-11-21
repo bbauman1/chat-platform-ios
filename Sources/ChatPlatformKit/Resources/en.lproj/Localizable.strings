@@ -45,3 +45,6 @@
 "card.no_subscription" = "No active subscription from this app was found on this Apple Account.";
 "action.ok" = "OK";
 "sender.ai" = "%@ · AI";
+"sender.ai_badge" = "AI";
+"header.people" = "%@ · %d People";
+"a11y.people" = "People in this chat";

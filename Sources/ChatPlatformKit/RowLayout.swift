@@ -23,9 +23,14 @@ struct MessageLayout: Equatable {
     /// An action card's buttons at the bottom of the bubble, each under a hairline.
     var actionButtons: [CGRect] = []
     var actionTitles: [NSAttributedString] = []
-    /// The AI's name line above the bubble.
+    /// The sender's name line above the bubble.
     var sender: CGRect = .zero
     var senderAttributedText: NSAttributedString?
+    /// The sender's avatar beside the last bubble of a run.
+    var avatar: CGRect = .zero
+    /// The tapback badge's tail: a bigger and a smaller dot trailing off its
+    /// bottom corner, like Messages.
+    var reactionDots: [CGRect] = []
 }
 
 struct LayoutMetrics {
@@ -52,8 +57,17 @@ struct LayoutMetrics {
     /// An action card's button row, and the card's narrowest width.
     var actionButtonHeight: CGFloat = 44
     var actionMinWidth: CGFloat = 220
-    /// Space between the AI's name line and what's under it.
+    /// Space between the sender's name line and what's under it.
     var senderSpacing: CGFloat = 2
+    /// Group chat avatars beside incoming bubbles, and the gap to the bubble.
+    var avatarSize: CGFloat = 28
+    var avatarGap: CGFloat = 8
+    /// A tapback badge is at least this tall, and never narrower than tall.
+    var reactionMinSide: CGFloat = 30
+    /// The badge's tail dots.
+    var reactionDotSizes: (big: CGFloat, small: CGFloat) = (9, 4.5)
+    /// "AI" after the AI's name.
+    var aiBadgeColor: UIColor = .systemPurple
 }
 
 /// Measures rows. Thread-safe: text is measured with
@@ -77,7 +91,9 @@ struct RowLayoutCalculator {
         quoteColor: UIColor, reactionColor: UIColor, senderColor: UIColor
     ) -> MessageLayout {
         let m = metrics
-        let maxBubble = floor((width - 2 * m.sideInset) * m.maxBubbleWidthFraction)
+        // Incoming bubbles move right of the avatars in the group chat look.
+        let leading: CGFloat = !row.isOutgoing && row.avatarColumn ? m.avatarSize + m.avatarGap : 0
+        let maxBubble = floor((width - 2 * m.sideInset - leading) * m.maxBubbleWidthFraction)
         let maxText = maxBubble - m.bubblePadding.left - m.bubblePadding.right
         var contentWidth: CGFloat = 0
         var y = m.bubblePadding.top
@@ -155,11 +171,18 @@ struct RowLayoutCalculator {
         var sender = CGRect.zero
         var senderText: NSAttributedString?
         if let label = row.senderLabel {
-            let text = NSAttributedString(string: label, attributes: [.font: captionFont, .foregroundColor: senderColor])
+            let text = NSMutableAttributedString(
+                string: label, attributes: [.font: captionFont, .foregroundColor: senderColor])
+            if let badge = row.senderBadge {
+                let font = UIFont.systemFont(ofSize: (captionFont.pointSize * 0.9).rounded(), weight: .semibold)
+                text.append(NSAttributedString(string: "  " + badge, attributes: [
+                    .font: font, .foregroundColor: m.aiBadgeColor, .kern: 0.3,
+                ]))
+            }
             let bounds = text.boundingRect(
                 with: CGSize(width: maxBubble, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-            let x = m.sideInset + m.bubblePadding.left / 2
+            let x = m.sideInset + leading + m.bubblePadding.left / 2
             sender = CGRect(x: x, y: 0, width: min(ceil(bounds.width), maxBubble), height: ceil(captionFont.lineHeight))
             senderText = text
             top = sender.maxY + m.senderSpacing
@@ -175,7 +198,7 @@ struct RowLayoutCalculator {
             let maxHeight = ceil(quoteFont.lineHeight * CGFloat(m.quoteMaxLines))
             let size = CGSize(width: ceil(bounds.width), height: min(ceil(bounds.height), maxHeight))
             let quoteWidth = size.width + m.quotePadding.left + m.quotePadding.right
-            let quoteX = row.isOutgoing ? width - m.sideInset - quoteWidth : m.sideInset
+            let quoteX = row.isOutgoing ? width - m.sideInset - quoteWidth : m.sideInset + leading
             quote = CGRect(
                 x: quoteX, y: top, width: quoteWidth, height: size.height + m.quotePadding.top + m.quotePadding.bottom)
             quoteText = CGRect(
@@ -192,12 +215,11 @@ struct RowLayoutCalculator {
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             reactionSize = CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
             reactionText = text
-            let badgeHeight = reactionSize.height + m.reactionPadding.top + m.reactionPadding.bottom
-            top += max(0, badgeHeight - m.reactionOverlap)
+            top += max(0, Self.badgeSize(reactionSize, metrics: m).height - m.reactionOverlap)
         }
 
         let bubbleWidth = contentWidth + m.bubblePadding.left + m.bubblePadding.right
-        let bubbleX = row.isOutgoing ? width - m.sideInset - bubbleWidth : m.sideInset
+        let bubbleX = row.isOutgoing ? width - m.sideInset - bubbleWidth : m.sideInset + leading
         let bubble = CGRect(x: bubbleX, y: top, width: bubbleWidth, height: y)
         // Frames inside the bubble become frames in the cell.
         func shift(_ r: CGRect) -> CGRect { r.offsetBy(dx: bubbleX, dy: top) }
@@ -212,16 +234,31 @@ struct RowLayoutCalculator {
         // The badge sits on the bubble's top corner facing the other side,
         // like Messages' tapbacks: top left of your messages, top right of the team's.
         var reactions = CGRect.zero, reactionsText = CGRect.zero
+        var reactionDots: [CGRect] = []
         if reactionText != nil {
-            let badge = CGSize(
-                width: reactionSize.width + m.reactionPadding.left + m.reactionPadding.right,
-                height: reactionSize.height + m.reactionPadding.top + m.reactionPadding.bottom)
+            let badge = Self.badgeSize(reactionSize, metrics: m, circle: row.reactions.count == 1 && row.reactions[0].count == 1)
             var x = row.isOutgoing ? bubble.minX - badge.width + m.reactionOutset : bubble.maxX - m.reactionOutset
             x = min(max(4, x), width - 4 - badge.width)
             reactions = CGRect(x: x, y: bubble.minY - badge.height + m.reactionOverlap, width: badge.width, height: badge.height)
             reactionsText = CGRect(
-                x: x + m.reactionPadding.left, y: reactions.minY + m.reactionPadding.top,
+                x: reactions.midX - reactionSize.width / 2, y: reactions.midY - reactionSize.height / 2,
                 width: reactionSize.width, height: reactionSize.height)
+            // The tail trails off the corner away from the bubble's middle.
+            let (big, small) = m.reactionDotSizes
+            let outward: CGFloat = row.isOutgoing ? -1 : 1
+            let corner = CGPoint(
+                x: row.isOutgoing ? reactions.minX + badge.height * 0.22 : reactions.maxX - badge.height * 0.22,
+                y: reactions.maxY - badge.height * 0.22)
+            let bigCenter = CGPoint(x: corner.x + outward * big * 0.35, y: corner.y + big * 0.45)
+            let smallCenter = CGPoint(x: bigCenter.x + outward * big * 0.85, y: bigCenter.y + big * 0.8)
+            reactionDots = [
+                CGRect(x: bigCenter.x - big / 2, y: bigCenter.y - big / 2, width: big, height: big),
+                CGRect(x: smallCenter.x - small / 2, y: smallCenter.y - small / 2, width: small, height: small),
+            ]
+        }
+        var avatar = CGRect.zero
+        if row.showsAvatar, !row.isOutgoing {
+            avatar = CGRect(x: m.sideInset, y: bubble.maxY - m.avatarSize, width: m.avatarSize, height: m.avatarSize)
         }
 
         var height = bubble.maxY
@@ -236,7 +273,17 @@ struct RowLayoutCalculator {
             attributedText: attributed, quote: quote, quoteText: quoteText, quoteAttributedText: quoteAttributed,
             reactions: reactions, reactionsText: reactionsText, reactionsAttributedText: reactionText,
             actionButtons: actionButtons, actionTitles: actionTitles, sender: sender,
-            senderAttributedText: senderText)
+            senderAttributedText: senderText, avatar: avatar, reactionDots: reactionDots)
+    }
+
+    /// A tapback badge around its text: a circle for one emoji, a pill for more.
+    static func badgeSize(_ text: CGSize, metrics m: LayoutMetrics, circle: Bool = true) -> CGSize {
+        let height = max(m.reactionMinSide, text.height + m.reactionPadding.top + m.reactionPadding.bottom)
+        if circle {
+            let side = max(height, text.width + 8)
+            return CGSize(width: side, height: side)
+        }
+        return CGSize(width: max(height, text.width + m.reactionPadding.left + m.reactionPadding.right), height: height)
     }
 
     /// Card buttons use the body font, semibold.
@@ -297,6 +344,9 @@ final class LayoutCache {
         hasher.combine(row.replyTo)
         hasher.combine(row.action)
         hasher.combine(row.senderLabel)
+        hasher.combine(row.senderBadge)
+        hasher.combine(row.showsAvatar)
+        hasher.combine(row.avatarColumn)
         let key = Key(row: row.key, content: hasher.finalize())
         if let cached = layouts[key] { return cached }
         let layout = compute(row)

@@ -71,6 +71,10 @@ public struct ChatAppearance {
     public var showTypingIndicator: Bool?
     /// The composer's photo button.
     public var allowPhotos: Bool?
+    /// A group chat look: each teammate's and the AI's name above their
+    /// messages, their avatar beside them, and the people in the title.
+    /// Defaults to on.
+    public var showSenders: Bool?
     /// The navigation title. Defaults to "Support" in the user's language.
     public var title: String?
     /// The text of a chat with no messages yet.
@@ -82,7 +86,7 @@ public struct ChatAppearance {
         secondaryText: ChatColor? = nil, inputBackground: ChatColor? = nil, bodyFont: UIFont? = nil,
         captionFont: UIFont? = nil, titleFont: UIFont? = nil, bubbleCornerRadius: CGFloat? = nil,
         showReadReceipts: Bool? = nil, showTypingIndicator: Bool? = nil, allowPhotos: Bool? = nil,
-        title: String? = nil, emptyStateMessage: String? = nil
+        title: String? = nil, emptyStateMessage: String? = nil, showSenders: Bool? = nil
     ) {
         self.accent = accent
         self.background = background
@@ -99,6 +103,7 @@ public struct ChatAppearance {
         self.showReadReceipts = showReadReceipts
         self.showTypingIndicator = showTypingIndicator
         self.allowPhotos = allowPhotos
+        self.showSenders = showSenders
         self.title = title
         self.emptyStateMessage = emptyStateMessage
     }
@@ -123,7 +128,8 @@ public struct ChatAppearance {
             showReadReceipts: preferences.showReadReceipts, showTypingIndicator: preferences.showTypingIndicator,
             allowPhotos: preferences.allowPhotos,
             title: RemoteAppearance.text(preferences.title, languages: languages),
-            emptyStateMessage: RemoteAppearance.text(preferences.emptyStateMessage, languages: languages))
+            emptyStateMessage: RemoteAppearance.text(preferences.emptyStateMessage, languages: languages),
+            showSenders: preferences.showSenders)
     }
 
     /// This layer over `lower`: each field this layer sets wins, and each
@@ -146,7 +152,8 @@ public struct ChatAppearance {
             showReadReceipts: showReadReceipts ?? lower.showReadReceipts,
             showTypingIndicator: showTypingIndicator ?? lower.showTypingIndicator,
             allowPhotos: allowPhotos ?? lower.allowPhotos, title: title ?? lower.title,
-            emptyStateMessage: emptyStateMessage ?? lower.emptyStateMessage)
+            emptyStateMessage: emptyStateMessage ?? lower.emptyStateMessage,
+            showSenders: showSenders ?? lower.showSenders)
     }
 
     /// The layers for a chat about `conversation`: `presentation`, the

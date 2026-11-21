@@ -7,6 +7,19 @@ at release.
 
 ## Unreleased
 
+## 0.3.0 (2026-11-21)
+
+- Group chat look, like Messages: the AI agent and each teammate are their
+  own people, with their name above the first bubble of a run and their
+  avatar (image, else initials; a sparkle for the AI) beside the last one.
+  The title stacks the people who answered over "Support · 2 People", with
+  a menu listing them. `Message.sender` (`MessageSender`: `id`, `name`,
+  `avatarURL`) says who wrote a team message; older servers and caches
+  without it still decode. Turn it off with `ChatAppearance.showSenders`
+  (code or per screen) or the dashboard's "Team names and avatars".
+- Bubbles have the Messages tail on the last bubble of a run, and tapbacks
+  are round badges with a two-dot tail on the bubble's top corner.
+
 ## 0.2.0 (2026-11-21)
 
 - Action cards: a message from the team can carry a rate,

@@ -8,7 +8,7 @@ final class MessageCell: UICollectionViewCell {
     static let reuseID = "message"
 
     /// The bubble, which the long-press menu lifts as its preview.
-    let bubble = UIView()
+    let bubble = BubbleView()
     private let textLabel = UILabel()
     private var imageViews: [UIImageView] = []
     /// An action card's buttons, each under a hairline.
@@ -18,12 +18,15 @@ final class MessageCell: UICollectionViewCell {
     /// The quoted message, faded, above the bubble.
     let quoteBubble = UIView()
     private let quoteLabel = UILabel()
-    /// Tapbacks on the bubble's top corner.
+    /// Tapbacks on the bubble's top corner, with their two-dot tail.
     let reactionBadge = UIView()
     let reactionLabel = UILabel()
-    /// Revealed behind the row while it's swiped to reply.
-    /// The AI's name above its first message in a run.
+    private let reactionDots = [UIView(), UIView()]
+    /// The sender's avatar beside the last bubble of their run.
+    let avatar = AvatarView()
+    /// The sender's name above their first message in a run.
     private let senderLabel = UILabel()
+    /// Revealed behind the row while it's swiped to reply.
     private let replyArrow = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var layout: MessageLayout?
     /// The images this cell is showing, so a late load for a reused cell is dropped.
@@ -39,7 +42,9 @@ final class MessageCell: UICollectionViewCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in
-            self.reactionBadge.layer.borderColor = self.badgeBorder.resolvedColor(with: self.traitCollection).cgColor
+            let border = self.badgeBorder.resolvedColor(with: self.traitCollection).cgColor
+            self.reactionBadge.layer.borderColor = border
+            for dot in self.reactionDots { dot.layer.borderColor = border }
         }
         replyArrow.contentMode = .center
         replyArrow.alpha = 0
@@ -50,8 +55,7 @@ final class MessageCell: UICollectionViewCell {
         contentView.addSubview(quoteBubble)
         quoteLabel.lineBreakMode = .byTruncatingTail
         contentView.addSubview(quoteLabel)
-        bubble.layer.cornerCurve = .continuous
-        bubble.clipsToBounds = true
+        contentView.addSubview(avatar)
         contentView.addSubview(bubble)
         textLabel.numberOfLines = 0
         textLabel.isUserInteractionEnabled = true
@@ -84,6 +88,10 @@ final class MessageCell: UICollectionViewCell {
         statusLabel.isUserInteractionEnabled = true
         statusLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
         contentView.addSubview(statusLabel)
+        for dot in reactionDots.reversed() {
+            dot.layer.borderWidth = 1.5
+            contentView.addSubview(dot)
+        }
         reactionBadge.layer.cornerCurve = .continuous
         reactionBadge.layer.borderWidth = 2
         contentView.addSubview(reactionBadge)
@@ -98,8 +106,11 @@ final class MessageCell: UICollectionViewCell {
 
     func configure(_ row: MessageRow, layout: MessageLayout, theme: ChatTheme, strings: ChatStrings) {
         self.layout = layout
-        bubble.backgroundColor = row.isOutgoing ? theme.outgoingBubble : theme.incomingBubble
-        bubble.layer.cornerRadius = theme.bubbleCornerRadius
+        bubble.fillColor = row.isOutgoing ? theme.outgoingBubble : theme.incomingBubble
+        bubble.cornerRadius = theme.bubbleCornerRadius
+        bubble.tail = row.showsTail ? (row.isOutgoing ? .trailing : .leading) : .none
+        avatar.isHidden = !row.showsAvatar || row.isOutgoing
+        if !avatar.isHidden { avatar.configure(row.sender, tint: theme.tint) }
         // Text color is baked into the attributed string at measure time.
         textLabel.attributedText = layout.attributedText
         textLabel.isHidden = layout.attributedText == nil
@@ -149,10 +160,17 @@ final class MessageCell: UICollectionViewCell {
         reactionBadge.isHidden = layout.reactionsAttributedText == nil
         reactionLabel.isHidden = reactionBadge.isHidden
         reactionLabel.attributedText = layout.reactionsAttributedText
-        reactionBadge.backgroundColor = mine ? theme.tint : theme.incomingBubble
+        let badgeColor = mine ? theme.tint : theme.incomingBubble
+        reactionBadge.backgroundColor = badgeColor
         badgeBorder = theme.background
-        reactionBadge.layer.borderColor = theme.background.resolvedColor(with: traitCollection).cgColor
+        let border = theme.background.resolvedColor(with: traitCollection).cgColor
+        reactionBadge.layer.borderColor = border
         reactionBadge.layer.cornerRadius = layout.reactions.height / 2
+        for (index, dot) in reactionDots.enumerated() {
+            dot.isHidden = reactionBadge.isHidden || index >= layout.reactionDots.count
+            dot.backgroundColor = badgeColor
+            dot.layer.borderColor = border
+        }
         replyArrow.tintColor = theme.secondaryText
 
         senderLabel.attributedText = layout.senderAttributedText
@@ -161,7 +179,7 @@ final class MessageCell: UICollectionViewCell {
         var label = [
             row.isOutgoing ? strings("a11y.from_you")
                 : row.aiName.map { String(format: strings("sender.ai"), $0.isEmpty ? strings("a11y.from_team") : $0) }
-                ?? strings("a11y.from_team"),
+                ?? row.sender?.name ?? strings("a11y.from_team"),
         ]
         if let replyTo = row.replyTo {
             label.append(String(format: strings("a11y.reply_to"), replyTo.textPreview.isEmpty ? strings("a11y.photo") : replyTo.textPreview))
@@ -204,7 +222,12 @@ final class MessageCell: UICollectionViewCell {
         quoteLabel.frame = layout.quoteText
         reactionBadge.frame = layout.reactions
         reactionLabel.frame = layout.reactionsText
+        for (index, dot) in reactionDots.enumerated() where index < layout.reactionDots.count {
+            dot.frame = layout.reactionDots[index]
+            dot.layer.cornerRadius = dot.frame.height / 2
+        }
         senderLabel.frame = layout.sender
+        avatar.frame = layout.avatar
         let arrowSide: CGFloat = 28
         replyArrow.frame = CGRect(
             x: 8, y: layout.bubble.midY - arrowSide / 2, width: arrowSide, height: arrowSide)
@@ -355,13 +378,11 @@ final class UnreadDividerCell: UICollectionViewCell {
 /// Three pulsing dots in an incoming bubble while the team is typing.
 final class TypingCell: UICollectionViewCell {
     static let reuseID = "typing"
-    /// The bubble, which the long-press menu lifts as its preview.
-    let bubble = UIView()
+    let bubble = BubbleView()
     private var dots: [UIView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        bubble.layer.cornerCurve = .continuous
         contentView.addSubview(bubble)
         for _ in 0..<3 {
             let dot = UIView()
@@ -375,10 +396,12 @@ final class TypingCell: UICollectionViewCell {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(theme: ChatTheme, strings: ChatStrings, metrics: LayoutMetrics) {
-        bubble.backgroundColor = theme.incomingBubble
-        bubble.layer.cornerRadius = theme.bubbleCornerRadius
-        bubble.frame = CGRect(x: metrics.sideInset, y: 4, width: 60, height: 36)
+    func configure(theme: ChatTheme, strings: ChatStrings, metrics: LayoutMetrics, avatarColumn: Bool = false) {
+        bubble.fillColor = theme.incomingBubble
+        bubble.cornerRadius = theme.bubbleCornerRadius
+        bubble.tail = .leading
+        let x = metrics.sideInset + (avatarColumn ? metrics.avatarSize + metrics.avatarGap : 0)
+        bubble.frame = CGRect(x: x, y: 4, width: 60, height: 36)
         for (index, dot) in dots.enumerated() {
             dot.backgroundColor = theme.secondaryText
             dot.frame = CGRect(x: 14 + CGFloat(index) * 12, y: 14, width: 8, height: 8)

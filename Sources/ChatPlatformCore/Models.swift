@@ -109,6 +109,46 @@ public struct ReplyPreview: Codable, Sendable, Equatable, Hashable {
     }
 }
 
+/// Who on the team sent a message: one person in the chat, like a member of
+/// a group chat. Teammates are keyed by their member ID, the AI agent by `ai`.
+public struct MessageSender: Codable, Sendable, Equatable, Hashable {
+    /// Stable per person: the member's ID, or `ai` for the AI agent.
+    public var id: String
+    /// The name to show above their messages; nil shows the team's name.
+    public var name: String?
+    /// An https avatar image; nil shows initials (people) or the AI badge.
+    public var avatarURL: URL?
+
+    public init(id: String, name: String? = nil, avatarURL: URL? = nil) {
+        self.id = id
+        self.name = name
+        self.avatarURL = avatarURL
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name
+        case avatarURL = "avatarUrl"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        // Only https images load; anything else shows initials.
+        avatarURL = (try? c.decodeIfPresent(String.self, forKey: .avatarURL))
+            .flatMap { $0 }
+            .flatMap(URL.init(string:))
+            .flatMap { $0.scheme?.lowercased() == "https" ? $0 : nil }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(avatarURL?.absoluteString, forKey: .avatarURL)
+    }
+}
+
 /// A message the server has stored.
 public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
     public var id: String
@@ -128,11 +168,14 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
     public var action: MessageAction?
     /// The AI agent's name on its messages (`senderType` `.aiAgent`); nil otherwise.
     public var senderName: String?
+    /// The teammate or AI who sent a team message; nil for the user's own,
+    /// campaign and system messages, and from servers that predate it.
+    public var sender: MessageSender?
 
     public init(
         id: String, sequence: Int, clientId: String, senderType: SenderType, text: String,
         attachments: [Attachment] = [], createdAt: Date, reactions: [Reaction] = [], replyTo: ReplyPreview? = nil,
-        action: MessageAction? = nil, senderName: String? = nil
+        action: MessageAction? = nil, senderName: String? = nil, sender: MessageSender? = nil
     ) {
         self.id = id
         self.sequence = sequence
@@ -145,11 +188,12 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
         self.replyTo = replyTo
         self.action = action
         self.senderName = senderName
+        self.sender = sender
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, sequence, clientId, senderType, text, attachments, createdAt, reactions, replyTo, kind, action
-        case senderName
+        case senderName, sender
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -166,6 +210,7 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
         try c.encode(action == nil ? "text" : "action", forKey: .kind)
         try c.encodeIfPresent(action, forKey: .action)
         try c.encodeIfPresent(senderName, forKey: .senderName)
+        try c.encodeIfPresent(sender, forKey: .sender)
     }
 
     public init(from decoder: Decoder) throws {
@@ -186,6 +231,8 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
         action = kind == "action" ? try? c.decodeIfPresent(MessageAction.self, forKey: .action) : nil
         // Servers before P11.5 and older caches have no sender name.
         senderName = try c.decodeIfPresent(String.self, forKey: .senderName)
+        // Older servers and caches have no sender; a malformed one never fails the message.
+        sender = (try? c.decodeIfPresent(MessageSender.self, forKey: .sender)) ?? nil
     }
 }
 

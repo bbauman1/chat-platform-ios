@@ -324,6 +324,7 @@ public final class ChatViewController: UIViewController {
             self.offlineBanner.font = self.theme.captionFont
             self.emptyState.font = self.theme.captionFont
             self.configureNavigationItem()
+            self.updateHeader(self.model.participants)
             // Keep the message being read in place while every row resizes.
             let anchor = self.isPinnedToBottom ? nil : self.visibleAnchor()
             self.isApplying = true
@@ -342,6 +343,42 @@ public final class ChatViewController: UIViewController {
             }
             self.isApplying = false
         }
+    }
+
+    /// The group chat look: names, avatars and the people in the title.
+    var showsSenders: Bool { appearance.showSenders ?? true }
+
+    /// The title: the people on the team who wrote here, stacked, over
+    /// "Support · 2 People", like a group in Messages. A chat no one has
+    /// answered yet keeps the plain title.
+    private func updateHeader(_ participants: [RowSender]) {
+        let title = appearance.title ?? strings("title")
+        guard showsSenders, !participants.isEmpty else {
+            if navigationItem.titleView is ChatHeaderView { navigationItem.titleView = nil }
+            return
+        }
+        let header = (navigationItem.titleView as? ChatHeaderView) ?? ChatHeaderView()
+        let text = participants.count > 1
+            ? String(format: strings("header.people"), title, participants.count) : title
+        let font = appearance.titleFont.map { ChatTheme.scale($0, style: .caption1, traits: traitCollection) }
+        header.configure(
+            people: participants, text: text, font: font, tint: theme.tint,
+            menuTitle: strings("a11y.people"),
+            names: participants.map { person in
+                let name = person.name ?? strings("a11y.from_team")
+                return person.isAI ? String(format: strings("sender.ai"), name) : name
+            })
+        for person in participants.suffix(ChatHeaderView.maxAvatars) {
+            guard let url = person.avatarURL else { continue }
+            let ref = ImageRef.remote(url), size = CGSize(width: ChatHeaderView.avatarSize, height: ChatHeaderView.avatarSize)
+            if let image = images.cached(ref, size: size) {
+                header.setImage(image, for: url)
+            } else {
+                let task = images.load(ref, size: size)
+                Task { [weak header] in header?.setImage(await task.value, for: url) }
+            }
+        }
+        navigationItem.titleView = header
     }
 
     /// The title font and close button from the presentation and appearance.
@@ -482,9 +519,10 @@ public final class ChatViewController: UIViewController {
             state: state, calendar: calendar, strings: strings, now: now(), unreadAfter: unreadBoundary,
             showsReadReceipts: appearance.showReadReceipts ?? true,
             showsTypingIndicator: appearance.showTypingIndicator ?? true,
-            hiddenActions: Set(actionAvailability.filter { !$0.value }.keys))
+            hiddenActions: Set(actionAvailability.filter { !$0.value }.keys), showsSenders: showsSenders)
         checkActionAvailability(next)
         let previous = model
+        if next.participants != previous.participants || !hasAppliedState { updateHeader(next.participants) }
         // While the user is at the newest message, follow new ones; otherwise
         // keep the message they're reading still, whatever changes above it.
         let followBottom = isPinnedToBottom || !hasAppliedState
@@ -722,7 +760,7 @@ public final class ChatViewController: UIViewController {
             return cell
         case .typing:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: TypingCell.reuseID, for: indexPath) as! TypingCell
-            cell.configure(theme: theme, strings: strings, metrics: calculator.metrics)
+            cell.configure(theme: theme, strings: strings, metrics: calculator.metrics, avatarColumn: showsSenders)
             return cell
         case .message:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: MessageCell.reuseID, for: indexPath) as! MessageCell
@@ -771,6 +809,18 @@ public final class ChatViewController: UIViewController {
                 }
             }
             cell.accessibilityCustomActions = actions.isEmpty ? nil : actions
+            if row.showsAvatar, let url = row.sender?.avatarURL {
+                let ref = ImageRef.remote(url), size = layout.avatar.size
+                if let image = images.cached(ref, size: size) {
+                    cell.avatar.setImage(image, for: url)
+                } else {
+                    let task = images.load(ref, size: size)
+                    Task { [weak cell] in
+                        let image = await task.value
+                        cell?.avatar.setImage(image, for: url)
+                    }
+                }
+            }
             for (index, ref) in row.images.enumerated() where index < layout.images.count {
                 let size = layout.images[index].size
                 if let image = images.cached(ref, size: size) {
@@ -1071,9 +1121,9 @@ public final class ChatViewController: UIViewController {
         // The lifted preview draws in its own container, where the bubble's
         // dynamic color can resolve to nothing; the platter paints it instead,
         // resolved against the cell as it looks in the thread.
-        parameters.backgroundColor = cell.bubble.backgroundColor?.resolvedColor(with: cell.traitCollection) ?? .clear
-        parameters.visiblePath = UIBezierPath(
-            roundedRect: cell.bubble.bounds, cornerRadius: cell.bubble.layer.cornerRadius)
+        parameters.backgroundColor = cell.bubble.fillColor.resolvedColor(with: cell.traitCollection)
+        // The bubble's own shape, tail included, which reaches past its bounds.
+        parameters.visiblePath = cell.bubble.shapePath
         return UITargetedPreview(view: cell.bubble, parameters: parameters)
     }
 

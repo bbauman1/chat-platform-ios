@@ -44,6 +44,8 @@ public struct RemoteAppearance: Codable, Sendable, Equatable {
         public var showReadReceipts: Bool?
         public var showTypingIndicator: Bool?
         public var allowPhotos: Bool?
+        /// Each teammate's and the AI's name and avatar on their messages.
+        public var showSenders: Bool?
         /// The chat's title by language code (`en`, `pt-BR`).
         public var title: [String: String]?
         /// The text of an empty chat by language code.
@@ -51,11 +53,12 @@ public struct RemoteAppearance: Codable, Sendable, Equatable {
 
         public init(
             showReadReceipts: Bool? = nil, showTypingIndicator: Bool? = nil, allowPhotos: Bool? = nil,
-            title: [String: String]? = nil, emptyStateMessage: [String: String]? = nil
+            title: [String: String]? = nil, emptyStateMessage: [String: String]? = nil, showSenders: Bool? = nil
         ) {
             self.showReadReceipts = showReadReceipts
             self.showTypingIndicator = showTypingIndicator
             self.allowPhotos = allowPhotos
+            self.showSenders = showSenders
             self.title = title
             self.emptyStateMessage = emptyStateMessage
         }

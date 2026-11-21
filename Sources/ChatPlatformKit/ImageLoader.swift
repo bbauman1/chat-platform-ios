@@ -40,6 +40,8 @@ final class ImageLoader {
             case .attachment(let attachment):
                 guard let url = try? await source?.imageURL(for: attachment) else { return nil }
                 data = try? await session.data(from: url).0
+            case .remote(let url):
+                data = try? await session.data(from: url).0
             }
             guard let data else { return nil }
             let image = await Self.decode(data, pixels: pixels)

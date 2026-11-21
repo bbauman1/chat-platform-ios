@@ -2,5 +2,5 @@
 /// it builds and tests on Linux too, and the agent app can reuse it.
 public enum ChatPlatformCore {
     /// The SDK's version, sent as part of the `User-Agent`.
-    public static let version = "0.2.0"
+    public static let version = "0.3.0"
 }
