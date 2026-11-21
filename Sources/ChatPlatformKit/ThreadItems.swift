@@ -42,6 +42,12 @@ struct MessageRow: Equatable {
     var reactions: [Reaction] = []
     /// The message this one quotes.
     var replyTo: ReplyPreview? = nil
+    /// Buttons under an action message's prompt.
+    var action: ActionCard? = nil
+    /// The AI agent's name, on its messages; nil for people.
+    var aiName: String? = nil
+    /// "Penny · AI" above the first message of a run from the AI.
+    var senderLabel: String? = nil
 }
 
 /// An image in a bubble: a sent attachment or the local bytes of an unsent one.
@@ -86,10 +92,12 @@ struct ThreadModel {
 
     /// Builds rows from state. `calendar` and `strings` decide separators;
     /// `unreadAfter` places the "NEW" divider above the first team message
-    /// with a higher sequence.
+    /// with a higher sequence. Cards on `hiddenActions` (message IDs) show
+    /// as plain messages.
     init(
         state: ConversationStore.State, calendar: Calendar, strings: ChatStrings, now: Date,
-        unreadAfter: Int? = nil, showsReadReceipts: Bool = true, showsTypingIndicator: Bool = true
+        unreadAfter: Int? = nil, showsReadReceipts: Bool = true, showsTypingIndicator: Bool = true,
+        hiddenActions: Set<String> = []
     ) {
         if state.hasOlderMessages { items.append(.loadingOlder) }
         let agentRead = state.conversation?.agentRead ?? 0
@@ -111,7 +119,10 @@ struct ThreadModel {
                     key: key, messageId: message.id, sequence: message.sequence,
                     isOutgoing: message.senderType.isEndUser, text: message.text,
                     images: message.attachments.map(ImageRef.attachment), createdAt: message.createdAt,
-                    status: status, groupedWithNext: false, reactions: message.reactions, replyTo: message.replyTo)
+                    status: status, groupedWithNext: false, reactions: message.reactions, replyTo: message.replyTo,
+                    action: message.senderType.isEndUser || hiddenActions.contains(message.id)
+                        ? nil : message.action.flatMap { ActionCard($0, strings: strings) },
+                    aiName: message.senderType == .aiAgent ? (message.senderName ?? "") : nil)
             ))
         }
         // Unsent messages go where they were written, so one that failed
@@ -147,6 +158,7 @@ struct ThreadModel {
             state.messages.first { !$0.senderType.isEndUser && $0.sequence > boundary }.map { "m:\($0.id)" }
         }
         var previousDate: Date?
+        var previousGrouped = false
         for (index, entry) in entries.enumerated() {
             let date = entry.row.createdAt
             if let previousDate, calendar.isDate(previousDate, inSameDayAs: date),
@@ -160,13 +172,22 @@ struct ThreadModel {
             previousDate = date
             if entry.row.key == firstUnreadKey { items.append(.unreadDivider) }
             var row = entry.row
+            // The AI's name goes above the first message of each run of its messages.
+            if let name = row.aiName, !previousGrouped {
+                row.senderLabel = String(format: strings("sender.ai"), name.isEmpty ? strings("a11y.from_team") : name)
+            }
             if index + 1 < entries.count {
                 let next = entries[index + 1].row
+                // A switch between the AI and a person starts a new group.
                 row.groupedWithNext = next.isOutgoing == row.isOutgoing
+                    && (next.aiName == nil) == (row.aiName == nil)
                     && calendar.isDate(next.createdAt, inSameDayAs: date)
                     && next.createdAt.timeIntervalSince(date) < 120
                     && next.key != firstUnreadKey
+            } else {
+                row.groupedWithNext = false
             }
+            previousGrouped = row.groupedWithNext
             items.append(entry.id)
             rows[entry.id] = row
             if let messageId = row.messageId { itemsByMessageId[messageId] = entry.id }

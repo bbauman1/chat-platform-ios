@@ -42,6 +42,7 @@ conversation.send(text: "Hi")
 - ``ConversationStore``
 - ``Conversation``
 - ``Message``
+- ``MessageAction``
 - ``OutgoingMessage``
 - ``ImageUpload``
 - ``Reaction``

@@ -7,6 +7,26 @@ at release.
 
 ## Unreleased
 
+## 0.2.0 (2026-11-21)
+
+- Action cards: a message from the team can carry a rate,
+  refund or manage-subscription card. Its buttons sit inside the bubble:
+  Apple's rating prompt plus a write-review link when the app has an App
+  Store ID, Apple's refund sheet for the named or newest purchase, and
+  subscription management with a before/after renewal check. The SDK
+  reports when a card is shown, tapped, opened and what came of it. A
+  refund or subscription card with nothing to act on drops its button.
+  `Message.action` holds the card; types the SDK doesn't know show as
+  ordinary messages.
+- Your Agent: messages from the app's AI agent (`SenderType.aiAgent`) show
+  its name and an "AI" label above each run of its messages, in English,
+  Spanish and German. `Message.senderName` holds the name. Older servers
+  and caches without it still decode.
+- Fixed: a team message lifted by a long press kept only its text; the
+  lifted bubble now keeps its color in light and dark mode.
+- Fixed: a short thread stayed higher up after the keyboard closed instead
+  of settling back next to the composer.
+
 ## 0.1.0 (2026-11-19)
 
 The first public release.

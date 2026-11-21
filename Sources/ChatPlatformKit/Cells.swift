@@ -11,6 +11,9 @@ final class MessageCell: UICollectionViewCell {
     let bubble = UIView()
     private let textLabel = UILabel()
     private var imageViews: [UIImageView] = []
+    /// An action card's buttons, each under a hairline.
+    private var actionButtons: [UIButton] = []
+    private var actionDividers: [UIView] = []
     private let statusLabel = UILabel()
     /// The quoted message, faded, above the bubble.
     let quoteBubble = UIView()
@@ -19,6 +22,8 @@ final class MessageCell: UICollectionViewCell {
     let reactionBadge = UIView()
     let reactionLabel = UILabel()
     /// Revealed behind the row while it's swiped to reply.
+    /// The AI's name above its first message in a run.
+    private let senderLabel = UILabel()
     private let replyArrow = UIImageView(image: UIImage(systemName: "arrowshape.turn.up.left.fill"))
     private var layout: MessageLayout?
     /// The images this cell is showing, so a late load for a reused cell is dropped.
@@ -26,6 +31,8 @@ final class MessageCell: UICollectionViewCell {
     var onStatusTap: (() -> Void)?
     var onLinkTap: ((URL) -> Void)?
     var onQuoteTap: (() -> Void)?
+    /// A tap on an action card's button, by index.
+    var onActionTap: ((Int) -> Void)?
     /// A layer color doesn't follow light and dark by itself.
     private var badgeBorder: UIColor = .systemBackground
 
@@ -62,6 +69,18 @@ final class MessageCell: UICollectionViewCell {
             imageViews.append(view)
             bubble.addSubview(view)
         }
+        for index in 0..<2 {
+            let divider = UIView()
+            actionDividers.append(divider)
+            bubble.addSubview(divider)
+            let button = UIButton(type: .system)
+            button.tag = index
+            button.titleLabel?.adjustsFontForContentSizeCategory = false
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.addTarget(self, action: #selector(actionTapped(_:)), for: .touchUpInside)
+            actionButtons.append(button)
+            bubble.addSubview(button)
+        }
         statusLabel.isUserInteractionEnabled = true
         statusLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
         contentView.addSubview(statusLabel)
@@ -69,6 +88,8 @@ final class MessageCell: UICollectionViewCell {
         reactionBadge.layer.borderWidth = 2
         contentView.addSubview(reactionBadge)
         contentView.addSubview(reactionLabel)
+        senderLabel.lineBreakMode = .byTruncatingTail
+        contentView.addSubview(senderLabel)
         isAccessibilityElement = true
     }
 
@@ -82,6 +103,18 @@ final class MessageCell: UICollectionViewCell {
         // Text color is baked into the attributed string at measure time.
         textLabel.attributedText = layout.attributedText
         textLabel.isHidden = layout.attributedText == nil
+        for (index, button) in actionButtons.enumerated() {
+            let shown = index < layout.actionTitles.count
+            button.isHidden = !shown
+            actionDividers[index].isHidden = !shown
+            actionDividers[index].backgroundColor = theme.secondaryText.withAlphaComponent(0.3)
+            if shown {
+                UIView.performWithoutAnimation {
+                    button.setAttributedTitle(layout.actionTitles[index], for: .normal)
+                    button.layoutIfNeeded()
+                }
+            }
+        }
         imageKeys = row.images.map(\.cacheKey)
         for (index, view) in imageViews.enumerated() {
             view.isHidden = index >= row.images.count
@@ -122,7 +155,14 @@ final class MessageCell: UICollectionViewCell {
         reactionBadge.layer.cornerRadius = layout.reactions.height / 2
         replyArrow.tintColor = theme.secondaryText
 
-        var label = [row.isOutgoing ? strings("a11y.from_you") : strings("a11y.from_team")]
+        senderLabel.attributedText = layout.senderAttributedText
+        senderLabel.isHidden = layout.senderAttributedText == nil
+
+        var label = [
+            row.isOutgoing ? strings("a11y.from_you")
+                : row.aiName.map { String(format: strings("sender.ai"), $0.isEmpty ? strings("a11y.from_team") : $0) }
+                ?? strings("a11y.from_team"),
+        ]
         if let replyTo = row.replyTo {
             label.append(String(format: strings("a11y.reply_to"), replyTo.textPreview.isEmpty ? strings("a11y.photo") : replyTo.textPreview))
         }
@@ -153,11 +193,18 @@ final class MessageCell: UICollectionViewCell {
         for (index, view) in imageViews.enumerated() where index < layout.images.count {
             view.frame = layout.images[index].offsetBy(dx: -origin.x, dy: -origin.y)
         }
+        let hairline = 1 / max(1, traitCollection.displayScale)
+        for (index, frame) in layout.actionButtons.enumerated() where index < actionButtons.count {
+            let local = frame.offsetBy(dx: -origin.x, dy: -origin.y)
+            actionButtons[index].frame = local
+            actionDividers[index].frame = CGRect(x: 0, y: local.minY, width: local.width, height: hairline)
+        }
         statusLabel.frame = layout.status
         quoteBubble.frame = layout.quote
         quoteLabel.frame = layout.quoteText
         reactionBadge.frame = layout.reactions
         reactionLabel.frame = layout.reactionsText
+        senderLabel.frame = layout.sender
         let arrowSide: CGFloat = 28
         replyArrow.frame = CGRect(
             x: 8, y: layout.bubble.midY - arrowSide / 2, width: arrowSide, height: arrowSide)
@@ -178,11 +225,13 @@ final class MessageCell: UICollectionViewCell {
         onStatusTap = nil
         onLinkTap = nil
         onQuoteTap = nil
+        onActionTap = nil
         setSwipe(offset: 0, progress: 0)
     }
 
     @objc private func statusTapped() { onStatusTap?() }
     @objc private func quoteTapped() { onQuoteTap?() }
+    @objc private func actionTapped(_ sender: UIButton) { onActionTap?(sender.tag) }
 
     /// Briefly highlights the bubble, after jumping to it from a quote.
     func flash() {

@@ -37,3 +37,11 @@
 "reaction.question" = "Question";
 "reaction.remove" = "Remove reaction";
 "action.close" = "Close";
+"card.rate" = "Rate the App";
+"card.write_review" = "Write a Review";
+"card.refund" = "Request a Refund";
+"card.manage_subscription" = "Manage Subscription";
+"card.no_purchase" = "No purchases from this app were found on this Apple Account.";
+"card.no_subscription" = "No active subscription from this app was found on this Apple Account.";
+"action.ok" = "OK";
+"sender.ai" = "%@ · AI";

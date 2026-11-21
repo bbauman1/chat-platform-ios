@@ -104,6 +104,10 @@ public final class ConversationStore {
     /// Per message: the latest reaction selection, and the write in flight.
     private var reactionGenerations: [String: Int] = [:]
     private var reactionWrites: [String: Task<Message, Error>] = [:]
+    /// Action steps reported or being reported (`message|step|result`), and
+    /// the ones that failed and go again after the next reload.
+    private var reportedActionSteps: Set<String> = []
+    private var unsentActionSteps: [(messageId: String, step: MessageAction.Step, result: String?)] = []
 
     init(
         api: APIClient, realtime: RealtimeClient, cache: MessageCache, clock: ChatClock,
@@ -223,6 +227,7 @@ public final class ConversationStore {
             reloadAgain = false
             try await performReload()
         } while reloadAgain
+        resendActionSteps()
     }
 
     private func performReload() async throws {
@@ -516,6 +521,40 @@ public final class ConversationStore {
         guard let index = state.pending.firstIndex(where: { $0.clientId == clientId }) else { return }
         state.pending[index].state = .failed
         persist()
+    }
+
+    // MARK: Action messages
+
+    /// Reports a step of an action message: `shown`, `tapped`,
+    /// `opened`, or `outcome` with a result such as `submitted`. Each
+    /// (message, step, result) is sent once; the server records it once too.
+    /// A step that fails goes again after the next successful reload.
+    public func reportAction(_ step: MessageAction.Step, result: String? = nil, on messageId: String) {
+        let key = "\(messageId)|\(step.rawValue)|\(result ?? "")"
+        guard !isCleared, reportedActionSteps.insert(key).inserted else { return }
+        Task { await sendActionStep(messageId: messageId, step: step, result: result, key: key) }
+    }
+
+    private func sendActionStep(messageId: String, step: MessageAction.Step, result: String?, key: String) async {
+        struct Body: Encodable, Sendable {
+            var step: String
+            var result: String?
+        }
+        do {
+            let body = try JSONEncoder.chat.encode(Body(step: step.rawValue, result: result))
+            _ = try await api.send("POST", "/v1/sdk/conversation/messages/\(messageId)/action-events", body: body)
+        } catch let error as ChatError where error.isRetryable {
+            reportedActionSteps.remove(key)
+            unsentActionSteps.append((messageId, step, result))
+        } catch {
+            // Not found (deleted), signed out or rejected: nothing to retry.
+        }
+    }
+
+    private func resendActionSteps() {
+        let unsent = unsentActionSteps
+        unsentActionSteps = []
+        for step in unsent { reportAction(step.step, result: step.result, on: step.messageId) }
     }
 
     // MARK: Reactions

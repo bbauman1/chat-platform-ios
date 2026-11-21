@@ -40,6 +40,22 @@ public final class ChatViewController: UIViewController {
     let source: ThreadSource
     private(set) var collectionView: UICollectionView!
     private(set) var inputBar: ChatInputBar!
+    private var jumpAboveComposer: NSLayoutConstraint!
+    private var installedAccessory: UIView?
+
+    /// A view that sits just above the composer (the support team app's macros).
+    @_spi(AgentApp) public var composerAccessory: UIView? {
+        didSet { if isViewLoaded { installComposerAccessory() } }
+    }
+
+    /// Replaces the composer's text (a macro) and focuses it.
+    @_spi(AgentApp) public func setComposerText(_ text: String) {
+        loadViewIfNeeded()
+        inputBar.text = text
+        source.setTyping(!text.isEmpty)
+        drafts?.save(text)
+        inputBar.textView.becomeFirstResponder()
+    }
     private let layout = ThreadLayout()
     private var dataSource: UICollectionViewDiffableDataSource<Int, ThreadItemID>!
     private(set) var model = ThreadModel()
@@ -101,6 +117,11 @@ public final class ChatViewController: UIViewController {
 
     /// Date handling, injectable for tests.
     var calendar = Calendar.current
+    /// Opens the native UI behind action cards; replaced in tests.
+    var storeActions: StoreActions = StoreKitActions()
+    /// Refund and subscription cards whose availability was checked, by
+    /// message ID: false when StoreKit found nothing to act on.
+    private var actionAvailability: [String: Bool] = [:]
     var now: () -> Date = Date.init
     /// Whether this controller starts and stops the conversation with its own visibility.
     var managesConnection = true
@@ -141,7 +162,9 @@ public final class ChatViewController: UIViewController {
         prefix.map { "\($0).\(appKey).\(userId)" }
     }
 
-    init(
+    /// A chat screen over any `ThreadSource`, for the support team app.
+    @_spi(AgentApp)
+    public init(
         source: ThreadSource, theme: ChatTheme, strings: ChatStrings, draftKey: String?,
         appearance: ChatAppearance = ChatAppearance(), presentation: ChatPresentationOptions = ChatPresentationOptions()
     ) {
@@ -273,10 +296,12 @@ public final class ChatViewController: UIViewController {
             offlineBanner.heightAnchor.constraint(equalToConstant: 24),
             offlineBanner.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             jumpSurface.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-            jumpSurface.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -8),
             jumpSurface.widthAnchor.constraint(equalToConstant: 36),
             jumpSurface.heightAnchor.constraint(equalToConstant: 36),
         ])
+        jumpAboveComposer = jumpSurface.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -8)
+        jumpAboveComposer.isActive = true
+        installComposerAccessory()
         view.keyboardLayoutGuide.followsUndockedKeyboard = true
         navigationItem.largeTitleDisplayMode = .never
         configureNavigationItem()
@@ -402,22 +427,48 @@ public final class ChatViewController: UIViewController {
         source.reconnectNow()
     }
 
+    private func installComposerAccessory() {
+        installedAccessory?.removeFromSuperview()
+        installedAccessory = composerAccessory
+        jumpAboveComposer.isActive = false
+        guard let accessory = composerAccessory else {
+            jumpAboveComposer = jumpContainer.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -8)
+            jumpAboveComposer.isActive = true
+            return
+        }
+        accessory.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(accessory, belowSubview: inputBar)
+        jumpAboveComposer = jumpContainer.bottomAnchor.constraint(equalTo: accessory.topAnchor, constant: -8)
+        NSLayoutConstraint.activate([
+            accessory.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            accessory.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            accessory.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
+            jumpAboveComposer,
+        ])
+    }
+
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let width = collectionView.bounds.width
         layoutCache.reset(width: width, category: traitCollection.preferredContentSizeCategory)
         // Keep the newest message above the composer and keyboard. The
         // automatic adjustment already adds the bottom safe area.
-        let covered = max(0, view.bounds.maxY - inputBar.frame.minY - view.safeAreaInsets.bottom)
+        let accessoryTop = installedAccessory.flatMap { $0.isHidden ? nil : $0.frame.minY } ?? .infinity
+        let covered = max(0, view.bounds.maxY - min(inputBar.frame.minY, accessoryTop) - view.safeAreaInsets.bottom)
+        // A taller composer (a second line, the accessory appearing) keeps the
+        // newest message in view even within the "near the bottom" margin.
+        let grew = covered > collectionView.contentInset.bottom
         if collectionView.contentInset.bottom != covered {
             collectionView.contentInset.bottom = covered
             collectionView.verticalScrollIndicatorInsets.bottom = covered
+            // A short thread is aligned to the bottom within the insets.
+            layout.invalidateLayout()
         }
         positionInitiallyIfNeeded()
         if isPinnedToBottom, hasAppliedState, !needsInitialPosition {
             isApplying = true
             collectionView.layoutIfNeeded()
-            if !isNearBottom { scrollToBottom(animated: false) }
+            if !isNearBottom || grew { scrollToBottom(animated: false) }
             isApplying = false
         }
     }
@@ -430,7 +481,9 @@ public final class ChatViewController: UIViewController {
         let next = ThreadModel(
             state: state, calendar: calendar, strings: strings, now: now(), unreadAfter: unreadBoundary,
             showsReadReceipts: appearance.showReadReceipts ?? true,
-            showsTypingIndicator: appearance.showTypingIndicator ?? true)
+            showsTypingIndicator: appearance.showTypingIndicator ?? true,
+            hiddenActions: Set(actionAvailability.filter { !$0.value }.keys))
+        checkActionAvailability(next)
         let previous = model
         // While the user is at the newest message, follow new ones; otherwise
         // keep the message they're reading still, whatever changes above it.
@@ -646,7 +699,8 @@ public final class ChatViewController: UIViewController {
             calculator.layout(
                 row, width: width, textColor: row.isOutgoing ? theme.outgoingText : theme.incomingText,
                 linkColor: row.isOutgoing ? theme.outgoingText : theme.tint, quoteColor: theme.secondaryText,
-                reactionColor: row.reactions.contains(where: \.mine) ? theme.outgoingText : theme.incomingText)
+                reactionColor: row.reactions.contains(where: \.mine) ? theme.outgoingText : theme.incomingText,
+                senderColor: theme.secondaryText)
         }
     }
 
@@ -683,9 +737,21 @@ public final class ChatViewController: UIViewController {
             if let quoted = row.replyTo?.id {
                 cell.onQuoteTap = { [weak self] in self?.jump(toMessage: quoted) }
             }
-            // The cell is one VoiceOver element, so its quote and long-press
-            // menu are offered as actions.
+            // The cell is one VoiceOver element, so its card buttons, quote
+            // and long-press menu are offered as actions.
             var actions: [UIAccessibilityCustomAction] = []
+            if let card = row.action, let messageId = row.messageId {
+                cell.onActionTap = { [weak self] index in
+                    guard card.buttons.indices.contains(index) else { return }
+                    self?.perform(card.buttons[index], of: card, messageId: messageId)
+                }
+                for (button, title) in zip(card.buttons, card.titles) {
+                    actions.append(UIAccessibilityCustomAction(name: title) { [weak self] _ in
+                        self?.perform(button, of: card, messageId: messageId)
+                        return true
+                    })
+                }
+            }
             if let quoted = row.replyTo?.id {
                 actions.append(UIAccessibilityCustomAction(name: strings("a11y.jump_to_quote")) { [weak self] _ in
                     self?.jump(toMessage: quoted)
@@ -735,6 +801,91 @@ public final class ChatViewController: UIViewController {
     private func open(_ url: URL) {
         guard MessageMarkdown.isSafe(url) else { return }
         UIApplication.shared.open(url)
+    }
+
+    // MARK: Action cards
+
+    /// Runs a card's button and reports each step.
+    func perform(_ button: ActionCard.Button, of card: ActionCard, messageId: String) {
+        guard let scene = view.window?.windowScene else { return }
+        source.reportAction(.tapped, result: nil, on: messageId)
+        let report: (MessageAction.Step, String?) -> Void = { [weak self] step, result in
+            self?.source.reportAction(step, result: result, on: messageId)
+        }
+        switch (button, card.kind) {
+        case (.rate, _):
+            storeActions.requestReview(in: scene)
+            report(.opened, nil)
+        case (.writeReview, .rateApp(let appStoreId?)):
+            guard let url = ActionCard.writeReviewURL(appStoreId: appStoreId) else { return }
+            Task {
+                if await storeActions.open(url) {
+                    report(.opened, nil)
+                    report(.outcome, "store_opened")
+                } else {
+                    report(.outcome, "failed")
+                }
+            }
+        case (.refund, .refund(let productId, let transactionId)):
+            Task {
+                let outcome = await storeActions.refund(
+                    productId: productId, transactionId: transactionId, in: scene, opened: { report(.opened, nil) })
+                switch outcome {
+                case .noPurchase:
+                    report(.outcome, "failed")
+                    showNotice(strings("card.no_purchase"))
+                default:
+                    report(.outcome, outcome.rawValue)
+                }
+            }
+        case (.manageSubscription, .manageSubscription(let groupId)):
+            Task {
+                let outcome = await storeActions.manageSubscriptions(
+                    groupId: groupId, in: scene, opened: { report(.opened, nil) })
+                switch outcome {
+                case .noSubscription:
+                    report(.outcome, "failed")
+                    showNotice(strings("card.no_subscription"))
+                default:
+                    report(.outcome, outcome.rawValue)
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    /// Asks StoreKit once per refund or subscription card whether there's
+    /// anything to act on. A card with nothing behind it loses its button
+    /// and reports `failed`, rather than offering a dead end.
+    private func checkActionAvailability(_ model: ThreadModel) {
+        for row in model.rows.values {
+            guard let card = row.action, let messageId = row.messageId, actionAvailability[messageId] == nil else { continue }
+            if case .rateApp = card.kind { continue }
+            actionAvailability[messageId] = true
+            let store = storeActions
+            Task { [weak self] in
+                let available =
+                    switch card.kind {
+                    case .refund(let productId, let transactionId):
+                        await store.canRefund(productId: productId, transactionId: transactionId)
+                    case .manageSubscription(let groupId):
+                        await store.hasSubscription(groupId: groupId)
+                    case .rateApp:
+                        true
+                    }
+                guard !available, let self else { return }
+                actionAvailability[messageId] = false
+                source.reportAction(.outcome, result: "failed", on: messageId)
+                apply(source.state)
+            }
+        }
+    }
+
+    private func showNotice(_ message: String) {
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: strings("action.ok"), style: .default))
+        present(alert, animated: true)
     }
 
     // MARK: Reactions and replies
@@ -917,7 +1068,10 @@ public final class ChatViewController: UIViewController {
             return nil
         }
         let parameters = UIPreviewParameters()
-        parameters.backgroundColor = .clear
+        // The lifted preview draws in its own container, where the bubble's
+        // dynamic color can resolve to nothing; the platter paints it instead,
+        // resolved against the cell as it looks in the thread.
+        parameters.backgroundColor = cell.bubble.backgroundColor?.resolvedColor(with: cell.traitCollection) ?? .clear
         parameters.visiblePath = UIBezierPath(
             roundedRect: cell.bubble.bounds, cornerRadius: cell.bubble.layer.cornerRadius)
         return UITargetedPreview(view: cell.bubble, parameters: parameters)
@@ -997,6 +1151,15 @@ extension ChatViewController: UICollectionViewDelegate {
         dismissalPreviewForItemAt indexPath: IndexPath
     ) -> UITargetedPreview? {
         bubblePreview(for: indexPath)
+    }
+
+    public func collectionView(
+        _ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath
+    ) {
+        guard indexPath.item < model.items.count, let row = model.rows[model.items[indexPath.item]],
+              row.action != nil, let messageId = row.messageId
+        else { return }
+        source.reportAction(.shown, result: nil, on: messageId)
     }
 
     public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {

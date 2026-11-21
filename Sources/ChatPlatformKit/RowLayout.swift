@@ -20,6 +20,12 @@ struct MessageLayout: Equatable {
     var reactions: CGRect = .zero
     var reactionsText: CGRect = .zero
     var reactionsAttributedText: NSAttributedString?
+    /// An action card's buttons at the bottom of the bubble, each under a hairline.
+    var actionButtons: [CGRect] = []
+    var actionTitles: [NSAttributedString] = []
+    /// The AI's name line above the bubble.
+    var sender: CGRect = .zero
+    var senderAttributedText: NSAttributedString?
 }
 
 struct LayoutMetrics {
@@ -43,6 +49,11 @@ struct LayoutMetrics {
     var reactionOverlap: CGFloat = 8
     /// How far the badge sticks out past the bubble's side.
     var reactionOutset: CGFloat = 12
+    /// An action card's button row, and the card's narrowest width.
+    var actionButtonHeight: CGFloat = 44
+    var actionMinWidth: CGFloat = 220
+    /// Space between the AI's name line and what's under it.
+    var senderSpacing: CGFloat = 2
 }
 
 /// Measures rows. Thread-safe: text is measured with
@@ -55,6 +66,15 @@ struct RowLayoutCalculator {
     func layout(
         _ row: MessageRow, width: CGFloat, textColor: UIColor, linkColor: UIColor,
         quoteColor: UIColor = .secondaryLabel, reactionColor: UIColor = .label
+    ) -> MessageLayout {
+        layout(
+            row, width: width, textColor: textColor, linkColor: linkColor, quoteColor: quoteColor,
+            reactionColor: reactionColor, senderColor: quoteColor)
+    }
+
+    func layout(
+        _ row: MessageRow, width: CGFloat, textColor: UIColor, linkColor: UIColor,
+        quoteColor: UIColor, reactionColor: UIColor, senderColor: UIColor
     ) -> MessageLayout {
         let m = metrics
         let maxBubble = floor((width - 2 * m.sideInset) * m.maxBubbleWidthFraction)
@@ -110,8 +130,40 @@ struct RowLayoutCalculator {
         }
         y += m.bubblePadding.bottom
 
-        // Above the bubble: the quoted message, then room for the tapback badge.
+        // An action card: full-width buttons under the prompt.
+        var actionButtons: [CGRect] = []
+        var actionTitles: [NSAttributedString] = []
+        if let card = row.action {
+            contentWidth = max(contentWidth, min(maxText, m.actionMinWidth - m.bubblePadding.left - m.bubblePadding.right))
+            for title in card.titles {
+                let text = NSAttributedString(string: title, attributes: [
+                    .font: actionFont, .foregroundColor: linkColor,
+                ])
+                let width = ceil(text.boundingRect(
+                    with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: m.actionButtonHeight),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).width)
+                contentWidth = max(contentWidth, min(maxText, width))
+                let height = max(m.actionButtonHeight, ceil(actionFont.lineHeight) + 20)
+                actionButtons.append(CGRect(x: 0, y: y, width: 0, height: height))
+                actionTitles.append(text)
+                y += height
+            }
+        }
+
+        // Above the bubble: the AI's name, the quoted message, then room for the tapback badge.
         var top: CGFloat = 0
+        var sender = CGRect.zero
+        var senderText: NSAttributedString?
+        if let label = row.senderLabel {
+            let text = NSAttributedString(string: label, attributes: [.font: captionFont, .foregroundColor: senderColor])
+            let bounds = text.boundingRect(
+                with: CGSize(width: maxBubble, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+            let x = m.sideInset + m.bubblePadding.left / 2
+            sender = CGRect(x: x, y: 0, width: min(ceil(bounds.width), maxBubble), height: ceil(captionFont.lineHeight))
+            senderText = text
+            top = sender.maxY + m.senderSpacing
+        }
         var quote = CGRect.zero, quoteText = CGRect.zero
         var quoteAttributed: NSAttributedString?
         if let replyTo = row.replyTo {
@@ -125,9 +177,9 @@ struct RowLayoutCalculator {
             let quoteWidth = size.width + m.quotePadding.left + m.quotePadding.right
             let quoteX = row.isOutgoing ? width - m.sideInset - quoteWidth : m.sideInset
             quote = CGRect(
-                x: quoteX, y: 0, width: quoteWidth, height: size.height + m.quotePadding.top + m.quotePadding.bottom)
+                x: quoteX, y: top, width: quoteWidth, height: size.height + m.quotePadding.top + m.quotePadding.bottom)
             quoteText = CGRect(
-                x: quoteX + m.quotePadding.left, y: m.quotePadding.top, width: size.width, height: size.height)
+                x: quoteX + m.quotePadding.left, y: top + m.quotePadding.top, width: size.width, height: size.height)
             quoteAttributed = text
             top = quote.maxY + m.quoteSpacing
         }
@@ -151,6 +203,7 @@ struct RowLayoutCalculator {
         func shift(_ r: CGRect) -> CGRect { r.offsetBy(dx: bubbleX, dy: top) }
         textFrame = shift(textFrame)
         imageFrames = imageFrames.map(shift)
+        actionButtons = actionButtons.map { shift(CGRect(x: 0, y: $0.minY, width: bubbleWidth, height: $0.height)) }
         if row.isOutgoing, contentWidth > textFrame.width, textFrame.width > 0 {
             // Right-align short text under wider images in outgoing bubbles.
             textFrame.origin.x = bubble.maxX - m.bubblePadding.right - textFrame.width
@@ -181,7 +234,17 @@ struct RowLayoutCalculator {
         return MessageLayout(
             height: ceil(height), bubble: bubble, text: textFrame, images: imageFrames, status: status,
             attributedText: attributed, quote: quote, quoteText: quoteText, quoteAttributedText: quoteAttributed,
-            reactions: reactions, reactionsText: reactionsText, reactionsAttributedText: reactionText)
+            reactions: reactions, reactionsText: reactionsText, reactionsAttributedText: reactionText,
+            actionButtons: actionButtons, actionTitles: actionTitles, sender: sender,
+            senderAttributedText: senderText)
+    }
+
+    /// Card buttons use the body font, semibold.
+    var actionFont: UIFont {
+        let descriptor = bodyFont.fontDescriptor.addingAttributes([
+            .traits: [UIFontDescriptor.TraitKey.weight: UIFont.Weight.semibold],
+        ])
+        return UIFont(descriptor: descriptor, size: bodyFont.pointSize)
     }
 
     /// Quotes use a smaller size of the body font.
@@ -232,6 +295,8 @@ final class LayoutCache {
         hasher.combine(row.groupedWithNext)
         hasher.combine(row.reactions)
         hasher.combine(row.replyTo)
+        hasher.combine(row.action)
+        hasher.combine(row.senderLabel)
         let key = Key(row: row.key, content: hasher.finalize())
         if let cached = layouts[key] { return cached }
         let layout = compute(row)

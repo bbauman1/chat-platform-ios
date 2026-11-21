@@ -24,6 +24,8 @@ public struct Conversation: Codable, Sendable, Equatable {
 /// Who sent a message. Unknown future values decode as `.unknown` (`/v1` is additive).
 public enum SenderType: Sendable, Equatable, Hashable, Codable {
     case endUser, member, campaign, system
+    /// The app's AI agent ("Your Agent"); `Message.senderName` is its name.
+    case aiAgent
     case unknown(String)
 
     public init(from decoder: Decoder) throws {
@@ -33,6 +35,7 @@ public enum SenderType: Sendable, Equatable, Hashable, Codable {
         case "member": self = .member
         case "campaign": self = .campaign
         case "system": self = .system
+        case "ai_agent": self = .aiAgent
         default: self = .unknown(raw)
         }
     }
@@ -48,6 +51,7 @@ public enum SenderType: Sendable, Equatable, Hashable, Codable {
         case .member: "member"
         case .campaign: "campaign"
         case .system: "system"
+        case .aiAgent: "ai_agent"
         case .unknown(let raw): raw
         }
     }
@@ -119,10 +123,16 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
     public var reactions: [Reaction]
     /// The message this one replies to.
     public var replyTo: ReplyPreview?
+    /// Set for an action message (`kind: "action"`): a card with a
+    /// button that opens native UI. `text` is its prompt, in the user's language.
+    public var action: MessageAction?
+    /// The AI agent's name on its messages (`senderType` `.aiAgent`); nil otherwise.
+    public var senderName: String?
 
     public init(
         id: String, sequence: Int, clientId: String, senderType: SenderType, text: String,
-        attachments: [Attachment] = [], createdAt: Date, reactions: [Reaction] = [], replyTo: ReplyPreview? = nil
+        attachments: [Attachment] = [], createdAt: Date, reactions: [Reaction] = [], replyTo: ReplyPreview? = nil,
+        action: MessageAction? = nil, senderName: String? = nil
     ) {
         self.id = id
         self.sequence = sequence
@@ -133,6 +143,29 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
         self.createdAt = createdAt
         self.reactions = reactions
         self.replyTo = replyTo
+        self.action = action
+        self.senderName = senderName
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sequence, clientId, senderType, text, attachments, createdAt, reactions, replyTo, kind, action
+        case senderName
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(sequence, forKey: .sequence)
+        try c.encode(clientId, forKey: .clientId)
+        try c.encode(senderType, forKey: .senderType)
+        try c.encode(text, forKey: .text)
+        try c.encode(attachments, forKey: .attachments)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(reactions, forKey: .reactions)
+        try c.encodeIfPresent(replyTo, forKey: .replyTo)
+        try c.encode(action == nil ? "text" : "action", forKey: .kind)
+        try c.encodeIfPresent(action, forKey: .action)
+        try c.encodeIfPresent(senderName, forKey: .senderName)
     }
 
     public init(from decoder: Decoder) throws {
@@ -147,6 +180,66 @@ public struct Message: Codable, Sendable, Equatable, Hashable, Identifiable {
         // Older caches (and servers before P1.14) have neither field.
         reactions = try c.decodeIfPresent([Reaction].self, forKey: .reactions) ?? []
         replyTo = try c.decodeIfPresent(ReplyPreview.self, forKey: .replyTo)
+        // Older servers and caches have no kind; a kind this SDK doesn't
+        // know shows as text. A malformed action never fails the message.
+        let kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "text"
+        action = kind == "action" ? try? c.decodeIfPresent(MessageAction.self, forKey: .action) : nil
+        // Servers before P11.5 and older caches have no sender name.
+        senderName = try c.decodeIfPresent(String.self, forKey: .senderName)
+    }
+}
+
+/// What an action message asks the app to do.
+public struct MessageAction: Codable, Sendable, Equatable, Hashable {
+    /// `rate_app`, `refund`, `manage_subscription`, or a type a newer SDK
+    /// renders (shown as an ordinary message here).
+    public var type: String
+    /// String and number parameters, as strings. `rate_app` gets `appStoreId`;
+    /// `refund` may have `productId` or `transactionId`; `manage_subscription`
+    /// may have `subscriptionGroupId`. Other values are dropped.
+    public var params: [String: String]
+
+    public init(type: String, params: [String: String] = [:]) {
+        self.type = type
+        self.params = params
+    }
+
+    /// A step the SDK reports (`POST .../action-events`); `outcome` carries a result.
+    public enum Step: String, Sendable, Codable {
+        case shown, tapped, opened, outcome
+    }
+
+    private enum CodingKeys: String, CodingKey { case type, params }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        var params: [String: String] = [:]
+        if let p = try? c.nestedContainer(keyedBy: AnyKey.self, forKey: .params) {
+            for key in p.allKeys {
+                if let value = try? p.decode(String.self, forKey: key) {
+                    params[key.stringValue] = value
+                } else if let value = try? p.decode(Int.self, forKey: key) {
+                    params[key.stringValue] = String(value)
+                } else if let value = try? p.decode(Double.self, forKey: key) {
+                    params[key.stringValue] = String(value)
+                }
+            }
+        }
+        self.params = params
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(type, forKey: .type)
+        try c.encode(params, forKey: .params)
     }
 }
 

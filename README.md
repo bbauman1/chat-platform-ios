@@ -8,7 +8,7 @@ In Xcode, choose File > Add Package Dependencies and enter
 `https://github.com/bbauman1/chat-platform-ios`, or add it to `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/bbauman1/chat-platform-ios", from: "0.1.0"),
+.package(url: "https://github.com/bbauman1/chat-platform-ios", from: "0.2.0"),
 ```
 
 Then add `ChatPlatformKit` (the chat screen) or only `ChatPlatformCore`
@@ -179,6 +179,22 @@ navigationController?.pushViewController(screen, animated: true)
   unread messages begin (until the user comes back to the chat), the screen
   opens at the first unread message, and a "jump to latest" button appears
   when scrolled up, tinted when new messages arrived.
+- Action cards from the team, with full-width buttons inside the
+  bubble under the prompt:
+  - **Rate the app**: Apple's rating prompt, plus "Write a Review" opening
+    the App Store page when the app has an App Store ID (`PATCH /v1/apps/{id}`
+    with `appStoreId`). Whether the user rated isn't knowable; the card
+    reports that the prompt was asked for.
+  - **Refund**: Apple's refund sheet for the transaction or product the
+    card names, else the newest purchase; it reports submitted, cancelled
+    or failed.
+  - **Manage subscription**: Apple's subscription sheet; the SDK compares
+    renewal before and after and reports a cancelled renewal, a changed
+    plan or no change.
+
+  When StoreKit finds no purchase or subscription to act on, the refund or
+  subscription card drops its button and reports `failed`. Each card reports
+  shown, tapped, opened and the outcome to the dashboard's metrics. Card types this SDK version doesn't know show as plain messages.
 - English, Spanish and German.
 
 ## Customizing the chat

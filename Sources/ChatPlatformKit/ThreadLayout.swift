@@ -19,6 +19,10 @@ final class ThreadLayout: UICollectionViewLayout {
 
     private var frames: [CGRect] = []
     private var contentHeight: CGFloat = 0
+    /// The rows' height plus padding, before bottom alignment.
+    private var rowsHeight: CGFloat = 0
+    /// How far rows are shifted down so a short thread sits at the bottom.
+    private var slack: CGFloat = 0
     private var builtForSize: CGSize = .zero
     private var needsRebuild = true
 
@@ -26,7 +30,14 @@ final class ThreadLayout: UICollectionViewLayout {
         super.prepare()
         guard let collectionView else { return }
         let size = collectionView.bounds.size
-        if needsRebuild || size != builtForSize { rebuild(collectionView) }
+        if needsRebuild || size != builtForSize {
+            rebuild(collectionView)
+        } else {
+            // The keyboard changes the insets without changing the bounds. Only
+            // the alignment depends on them, and it moves rows only in a short
+            // thread, so a long thread costs nothing per keyboard frame.
+            align(collectionView)
+        }
     }
 
     private func rebuild(_ collectionView: UICollectionView) {
@@ -42,15 +53,22 @@ final class ThreadLayout: UICollectionViewLayout {
             frames.append(CGRect(x: 0, y: y, width: width, height: height))
             y += height
         }
-        y += bottomPadding
-        // Short threads sit at the bottom, next to the input bar, like any chat.
+        rowsHeight = y + bottomPadding
+        slack = 0
+        align(collectionView)
+    }
+
+    /// Short threads sit at the bottom, next to the input bar, like any chat.
+    private func align(_ collectionView: UICollectionView) {
         let insets = collectionView.adjustedContentInset
         let visible = collectionView.bounds.height - insets.top - insets.bottom
-        let slack = max(0, visible - y)
-        if slack > 0 {
-            for index in frames.indices { frames[index].origin.y += slack }
+        let next = max(0, visible - rowsHeight)
+        if next != slack {
+            let delta = next - slack
+            for index in frames.indices { frames[index].origin.y += delta }
+            slack = next
         }
-        contentHeight = y + slack
+        contentHeight = rowsHeight + slack
     }
 
     override var collectionViewContentSize: CGSize {
