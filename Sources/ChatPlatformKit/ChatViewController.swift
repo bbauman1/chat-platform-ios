@@ -34,6 +34,10 @@ public final class ChatViewController: UIViewController {
     let appearance: ChatAppearance
     let presentation: ChatPresentationOptions
     private let emptyState = UILabel()
+    /// The group chat header: the people on the team over "2 People ›".
+    let header = ChatHeaderView()
+    /// Below the header when it shows, else below the navigation bar.
+    private var offlineBannerTop: NSLayoutConstraint!
     var emptyStateLabel: UILabel { emptyState }
     private var hostHidNavigationBar: Bool?
 
@@ -279,6 +283,9 @@ public final class ChatViewController: UIViewController {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
+        // Laid out by hand in viewDidLayoutSubviews: it hangs from the navigation bar.
+        header.isHidden = true
+        view.insertSubview(header, aboveSubview: collectionView)
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -291,7 +298,6 @@ public final class ChatViewController: UIViewController {
             emptyState.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
             emptyState.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 40),
             emptyState.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -40),
-            offlineBanner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
             offlineBanner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             offlineBanner.heightAnchor.constraint(equalToConstant: 24),
             offlineBanner.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
@@ -301,6 +307,8 @@ public final class ChatViewController: UIViewController {
         ])
         jumpAboveComposer = jumpSurface.bottomAnchor.constraint(equalTo: inputBar.topAnchor, constant: -8)
         jumpAboveComposer.isActive = true
+        offlineBannerTop = offlineBanner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
+        offlineBannerTop.isActive = true
         installComposerAccessory()
         view.keyboardLayoutGuide.followsUndockedKeyboard = true
         navigationItem.largeTitleDisplayMode = .never
@@ -348,19 +356,23 @@ public final class ChatViewController: UIViewController {
     /// The group chat look: names, avatars and the people in the title.
     var showsSenders: Bool { appearance.showSenders ?? true }
 
-    /// The title: the people on the team who wrote here, stacked, over
-    /// "Support · 2 People", like a group in Messages. A chat no one has
-    /// answered yet keeps the plain title.
+    /// The header: the people on the team who wrote here in a glass circle
+    /// over "2 People ›", like a group in Messages. It replaces the title; a
+    /// chat no one has answered yet keeps the plain title.
     private func updateHeader(_ participants: [RowSender]) {
-        let title = appearance.title ?? strings("title")
+        let wasShown = !header.isHidden
         guard showsSenders, !participants.isEmpty else {
-            if navigationItem.titleView is ChatHeaderView { navigationItem.titleView = nil }
+            header.isHidden = true
+            if wasShown {
+                navigationItem.titleView = nil
+                view.setNeedsLayout()
+            }
             return
         }
-        let header = (navigationItem.titleView as? ChatHeaderView) ?? ChatHeaderView()
         let text = participants.count > 1
-            ? String(format: strings("header.people"), title, participants.count) : title
-        let font = appearance.titleFont.map { ChatTheme.scale($0, style: .caption1, traits: traitCollection) }
+            ? String(format: strings("header.count"), participants.count)
+            : participants[0].name ?? strings("a11y.from_team")
+        let font = appearance.titleFont.map { ChatTheme.scale($0, style: .headline, traits: traitCollection) }
         header.configure(
             people: participants, text: text, font: font, tint: theme.tint,
             menuTitle: strings("a11y.people"),
@@ -378,7 +390,40 @@ public final class ChatViewController: UIViewController {
                 Task { [weak header] in header?.setImage(await task.value, for: url) }
             }
         }
-        navigationItem.titleView = header
+        header.isHidden = false
+        // An empty title view keeps the bar's title text from showing through.
+        if !wasShown {
+            navigationItem.titleView = UIView()
+            view.setNeedsLayout()
+        }
+    }
+
+    /// Hangs the header from the navigation bar's middle (or where one
+    /// would be) and keeps the oldest message below it.
+    private func layoutHeader() {
+        var top: CGFloat = 0
+        if !header.isHidden {
+            let middle: CGFloat
+            if let bar = navigationController?.navigationBar, navigationController?.isNavigationBarHidden == false,
+               bar.window != nil
+            {
+                middle = view.convert(bar.bounds, from: bar).midY
+            } else {
+                middle = view.safeAreaInsets.top + 22
+            }
+            let m = ChatHeaderView.metrics
+            let height = ceil(middle + m.pillDrop + m.pillHeight / 2)
+            header.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
+            header.anchorY = middle
+            top = max(0, height + 4 - view.safeAreaInsets.top)
+        }
+        // The offline banner sits below the header's pill rather than over it.
+        let bannerTop = 8 + (header.isHidden ? 0 : max(0, header.frame.maxY - view.safeAreaInsets.top))
+        if offlineBannerTop.constant != bannerTop { offlineBannerTop.constant = bannerTop }
+        if collectionView.contentInset.top != top {
+            collectionView.contentInset.top = top
+            collectionView.verticalScrollIndicatorInsets.top = top
+        }
     }
 
     /// The title font and close button from the presentation and appearance.
@@ -486,6 +531,9 @@ public final class ChatViewController: UIViewController {
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        layoutHeader()
+        inputBar.restsOnHomeIndicator = view.safeAreaInsets.bottom > 0
+            && inputBar.frame.maxY >= view.bounds.maxY - view.safeAreaInsets.bottom - 0.5
         let width = collectionView.bounds.width
         layoutCache.reset(width: width, category: traitCollection.preferredContentSizeCategory)
         // Keep the newest message above the composer and keyboard. The
@@ -737,8 +785,9 @@ public final class ChatViewController: UIViewController {
             calculator.layout(
                 row, width: width, textColor: row.isOutgoing ? theme.outgoingText : theme.incomingText,
                 linkColor: row.isOutgoing ? theme.outgoingText : theme.tint, quoteColor: theme.secondaryText,
-                reactionColor: row.reactions.contains(where: \.mine) ? theme.outgoingText : theme.incomingText,
-                senderColor: theme.secondaryText)
+                // Every badge is the incoming gray, whoever reacted.
+                reactionColor: theme.incomingText,
+                senderColor: theme.secondaryText == .secondaryLabel ? ChatTheme.senderName : theme.secondaryText)
         }
     }
 

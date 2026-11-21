@@ -46,5 +46,5 @@
 "action.ok" = "OK";
 "sender.ai" = "%@ · IA";
 "sender.ai_badge" = "IA";
-"header.people" = "%@ · %d personas";
+"header.count" = "%d personas";
 "a11y.people" = "Personas en este chat";

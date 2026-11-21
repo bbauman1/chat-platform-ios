@@ -2,9 +2,10 @@
 import UIKit
 
 /// A message bubble's shape: a rounded rectangle, with the Messages tail on
-/// the last bubble of a run. The tail reaches `BubbleShape.tailReach` points
-/// past the bubble's side, so the bubble's frame (and the text inside it)
-/// stays the same with or without one.
+/// the last bubble of a run. As in Messages on iOS 26, the tail hangs under
+/// the bubble's bottom corner (`BubbleShape.tailDrop` points below it) and
+/// never past its side, so the bubble's frame (and the text inside it)
+/// stays the same with or without one. Traced from a Messages screenshot.
 enum BubbleShape {
     enum Tail: Equatable {
         case none
@@ -14,8 +15,8 @@ enum BubbleShape {
         case leading
     }
 
-    /// How far the tail's tip reaches past the bubble's side.
-    static let tailReach: CGFloat = 4
+    /// How far the tail's tip hangs below the bubble.
+    static let tailDrop: CGFloat = 6.4
 
     static func path(size: CGSize, radius: CGFloat, tail: Tail) -> UIBezierPath {
         let w = size.width, h = size.height
@@ -23,30 +24,29 @@ enum BubbleShape {
         guard tail != .none, w > 0, h > 0 else {
             return UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: r)
         }
-        // Drawn for a trailing tail; a leading one is its mirror image.
-        let k = r * 0.448
-        let tip = w + tailReach
-        let start = max(r, tip - 22)
+        // Drawn for a leading tail; a trailing one is its mirror image.
         let path = UIBezierPath()
-        path.move(to: CGPoint(x: start, y: h))
-        path.addLine(to: CGPoint(x: r, y: h))
-        path.addCurve(to: CGPoint(x: 0, y: h - r), controlPoint1: CGPoint(x: k, y: h), controlPoint2: CGPoint(x: 0, y: h - k))
-        path.addLine(to: CGPoint(x: 0, y: r))
-        path.addCurve(to: CGPoint(x: r, y: 0), controlPoint1: CGPoint(x: 0, y: k), controlPoint2: CGPoint(x: k, y: 0))
+        path.move(to: CGPoint(x: r, y: 0))
         path.addLine(to: CGPoint(x: w - r, y: 0))
-        path.addCurve(to: CGPoint(x: w, y: r), controlPoint1: CGPoint(x: w - k, y: 0), controlPoint2: CGPoint(x: w, y: k))
-        path.addLine(to: CGPoint(x: w, y: max(r, h - 11)))
+        path.addArc(withCenter: CGPoint(x: w - r, y: r), radius: r, startAngle: -.pi / 2, endAngle: 0, clockwise: true)
+        path.addLine(to: CGPoint(x: w, y: h - r))
+        path.addArc(withCenter: CGPoint(x: w - r, y: h - r), radius: r, startAngle: 0, endAngle: .pi / 2, clockwise: true)
+        // The tail: from the bottom edge down to its tip, then up the left
+        // side, which bends out into the bubble's straight edge.
+        let base = min(21, w - r)
+        let tip = CGPoint(x: 8, y: h + tailDrop)
+        let neck = CGPoint(x: 10.4, y: h + 0.4)
+        let top = max(r, h - 24)
+        path.addLine(to: CGPoint(x: base, y: h))
+        path.addCurve(to: tip, controlPoint1: CGPoint(x: base - 2, y: h), controlPoint2: CGPoint(x: 14, y: tip.y))
+        path.addCurve(to: neck, controlPoint1: CGPoint(x: 8, y: h + 4.9), controlPoint2: CGPoint(x: 10.4, y: h + 2.4))
         path.addCurve(
-            to: CGPoint(x: tip, y: h), controlPoint1: CGPoint(x: w, y: h - 1), controlPoint2: CGPoint(x: tip, y: h))
-        path.addLine(to: CGPoint(x: tip + 0.05, y: h - 0.01))
-        path.addCurve(
-            to: CGPoint(x: tip - 11.04, y: h - 4.04), controlPoint1: CGPoint(x: tip - 4.07, y: h + 0.43),
-            controlPoint2: CGPoint(x: tip - 8.16, y: h - 1.06))
-        path.addCurve(
-            to: CGPoint(x: start, y: h), controlPoint1: CGPoint(x: tip - 16, y: h),
-            controlPoint2: CGPoint(x: max(start, tip - 19), y: h))
+            to: CGPoint(x: 0, y: top), controlPoint1: CGPoint(x: 9.9, y: h - 6.6),
+            controlPoint2: CGPoint(x: 0, y: top + 0.82 * (neck.y - top)))
+        path.addLine(to: CGPoint(x: 0, y: r))
+        path.addArc(withCenter: CGPoint(x: r, y: r), radius: r, startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: true)
         path.close()
-        if tail == .leading {
+        if tail == .trailing {
             path.apply(CGAffineTransform(scaleX: -1, y: 1).concatenating(CGAffineTransform(translationX: w, y: 0)))
         }
         return path
@@ -132,6 +132,16 @@ final class AvatarView: UIView {
 
     private var colors: [UIColor] = []
 
+    /// Contacts' monogram gradient, top to bottom: gray, and violet-gray in dark mode.
+    static let monogram: [UIColor] = [
+        UIColor { $0.userInterfaceStyle == .dark
+            ? UIColor(red: 79 / 255, green: 74 / 255, blue: 99 / 255, alpha: 1)
+            : UIColor(red: 169 / 255, green: 173 / 255, blue: 185 / 255, alpha: 1) },
+        UIColor { $0.userInterfaceStyle == .dark
+            ? UIColor(red: 54 / 255, green: 49 / 255, blue: 78 / 255, alpha: 1)
+            : UIColor(red: 134 / 255, green: 139 / 255, blue: 151 / 255, alpha: 1) },
+    ]
+
     func configure(_ sender: RowSender?, tint: UIColor, aiColor: UIColor = .systemPurple) {
         imageURL = sender?.avatarURL
         imageView.image = nil
@@ -142,14 +152,14 @@ final class AvatarView: UIView {
             colors = [tint, aiColor]
             symbolName = "sparkles"
         } else {
-            colors = [UIColor(white: 0.66, alpha: 1), UIColor(white: 0.53, alpha: 1)]
+            colors = Self.monogram
             symbolName = letters.isEmpty ? "person.2.fill" : nil
         }
         initials.text = symbolName == nil ? letters : nil
         initials.isHidden = symbolName != nil
         symbol.isHidden = symbolName == nil
         symbol.image = symbolName.map {
-            UIImage(systemName: $0, withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
+            UIImage(systemName: $0, withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
         } ?? nil
         setNeedsLayout()
     }
@@ -167,10 +177,10 @@ final class AvatarView: UIView {
         CATransaction.setDisableActions(true)
         gradient.frame = bounds
         gradient.colors = colors.map { $0.resolvedColor(with: traitCollection).cgColor }
-        gradient.startPoint = CGPoint(x: 0.2, y: 0)
-        gradient.endPoint = CGPoint(x: 0.8, y: 1)
+        gradient.startPoint = CGPoint(x: 0.5, y: 0)
+        gradient.endPoint = CGPoint(x: 0.5, y: 1)
         CATransaction.commit()
-        initials.font = UIFont.systemFont(ofSize: (bounds.height * 0.42).rounded(), weight: .semibold)
+        initials.font = UIFont.systemFont(ofSize: (bounds.height * 0.53).rounded(), weight: .semibold)
         initials.frame = bounds.insetBy(dx: 2, dy: 0)
         symbol.frame = bounds
         imageView.frame = bounds

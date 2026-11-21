@@ -28,6 +28,19 @@ final class ChatInputBar: UIView, UITextViewDelegate {
     private var attachSurface: UIView!
     private var fieldAfterAttach: NSLayoutConstraint!
     private var fieldAtEdge: NSLayoutConstraint!
+    private var fieldBottom: NSLayoutConstraint!
+    /// Measured from Messages (402 pt wide iPhone): a 39.5 pt glass circle
+    /// and field, 28 pt from the screen's sides.
+    static let height: CGFloat = 39.5
+    static let sideInset: CGFloat = 28
+    /// With the keyboard down, the field sits 6.5 pt into the home
+    /// indicator's area, like Messages; above the keyboard it keeps 8 pt clear.
+    var restsOnHomeIndicator = false {
+        didSet {
+            guard restsOnHomeIndicator != oldValue else { return }
+            fieldBottom.constant = restsOnHomeIndicator ? 6.5 : -8
+        }
+    }
     private(set) var photos: [(upload: ImageUpload, preview: UIImage)] = []
     private var theme: ChatTheme
     private let strings: ChatStrings
@@ -57,15 +70,15 @@ final class ChatInputBar: UIView, UITextViewDelegate {
                 material.bottomAnchor.constraint(equalTo: bottomAnchor, constant: 100),
             ])
         }
-        let attachBackground = Self.surface(cornerRadius: 18, glass: usesGlass, fill: theme.inputBackground)
-        let field = Self.surface(cornerRadius: 18, glass: usesGlass, fill: theme.inputBackground)
+        let attachBackground = Self.surface(cornerRadius: Self.height / 2, glass: usesGlass, fill: theme.inputBackground)
+        let field = Self.surface(cornerRadius: Self.height / 2, glass: usesGlass, fill: theme.inputBackground)
         self.field = field
         attachSurface = attachBackground
 
         attachButton.setImage(
-            UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)),
+            UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)),
             for: .normal)
-        attachButton.tintColor = theme.secondaryText
+        attachButton.tintColor = .label
         attachButton.accessibilityLabel = strings("input.attach")
         attachButton.addAction(UIAction { [weak self] _ in self?.onAttach?() }, for: .touchUpInside)
 
@@ -81,7 +94,7 @@ final class ChatInputBar: UIView, UITextViewDelegate {
         textView.tintColor = theme.tint
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
-        textView.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 4)
+        textView.textContainerInset = Self.textInsets(theme.bodyFont)
         textView.isScrollEnabled = false
         textView.delegate = self
         textView.accessibilityLabel = strings("input.placeholder")
@@ -112,9 +125,10 @@ final class ChatInputBar: UIView, UITextViewDelegate {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
-        textHeight = textView.heightAnchor.constraint(equalToConstant: 36)
-        fieldAfterAttach = field.leadingAnchor.constraint(equalTo: attachBackground.trailingAnchor, constant: 8)
-        fieldAtEdge = field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12)
+        textHeight = textView.heightAnchor.constraint(equalToConstant: Self.height)
+        fieldAfterAttach = field.leadingAnchor.constraint(equalTo: attachBackground.trailingAnchor, constant: 12)
+        fieldAtEdge = field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.sideInset)
+        fieldBottom = field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
         buildReplyBanner(theme: theme, strings: strings)
         fieldTop = field.topAnchor.constraint(equalTo: topAnchor, constant: 8)
         fieldBelowBanner = field.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 6)
@@ -123,18 +137,18 @@ final class ChatInputBar: UIView, UITextViewDelegate {
             replyBanner.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             replyBanner.leadingAnchor.constraint(equalTo: field.leadingAnchor),
             replyBanner.trailingAnchor.constraint(equalTo: field.trailingAnchor),
-            attachBackground.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            attachBackground.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.sideInset),
             attachBackground.bottomAnchor.constraint(equalTo: field.bottomAnchor),
-            attachBackground.widthAnchor.constraint(equalToConstant: 36),
-            attachBackground.heightAnchor.constraint(equalToConstant: 36),
+            attachBackground.widthAnchor.constraint(equalToConstant: Self.height),
+            attachBackground.heightAnchor.constraint(equalToConstant: Self.height),
             attachButton.topAnchor.constraint(equalTo: attachContent.topAnchor),
             attachButton.bottomAnchor.constraint(equalTo: attachContent.bottomAnchor),
             attachButton.leadingAnchor.constraint(equalTo: attachContent.leadingAnchor),
             attachButton.trailingAnchor.constraint(equalTo: attachContent.trailingAnchor),
 
             fieldAfterAttach,
-            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.sideInset),
+            fieldBottom,
 
             fieldStack.topAnchor.constraint(equalTo: fieldContent.topAnchor, constant: 0),
             fieldStack.leadingAnchor.constraint(equalTo: fieldContent.leadingAnchor),
@@ -142,8 +156,8 @@ final class ChatInputBar: UIView, UITextViewDelegate {
             fieldStack.bottomAnchor.constraint(equalTo: fieldContent.bottomAnchor),
             textHeight,
 
-            sendButton.trailingAnchor.constraint(equalTo: fieldContent.trailingAnchor, constant: -2),
-            sendButton.bottomAnchor.constraint(equalTo: fieldContent.bottomAnchor, constant: -2),
+            sendButton.trailingAnchor.constraint(equalTo: fieldContent.trailingAnchor, constant: -3.75),
+            sendButton.bottomAnchor.constraint(equalTo: fieldContent.bottomAnchor, constant: -3.75),
             sendButton.widthAnchor.constraint(equalToConstant: 32),
             sendButton.heightAnchor.constraint(equalToConstant: 32),
 
@@ -170,6 +184,12 @@ final class ChatInputBar: UIView, UITextViewDelegate {
         view.layer.cornerRadius = cornerRadius
         view.layer.cornerCurve = .continuous
         return view
+    }
+
+    /// Centers one line of `font` in the 39.5 pt field.
+    private static func textInsets(_ font: UIFont) -> UIEdgeInsets {
+        let vertical = max(4, (height - font.lineHeight) / 2)
+        return UIEdgeInsets(top: vertical, left: 8, bottom: vertical, right: 4)
     }
 
     private func buildReplyBanner(theme: ChatTheme, strings: ChatStrings) {
@@ -286,6 +306,7 @@ final class ChatInputBar: UIView, UITextViewDelegate {
         theme.bodyFont = body
         theme.captionFont = caption
         textView.font = body
+        textView.textContainerInset = Self.textInsets(body)
         placeholder.font = body
         setBannerFonts()
         textDidChange(notify: false)
@@ -304,7 +325,7 @@ final class ChatInputBar: UIView, UITextViewDelegate {
         let lineHeight = theme.bodyFont.lineHeight
         let maxHeight = ceil(lineHeight * 5 + textView.textContainerInset.top + textView.textContainerInset.bottom)
         let fitting = textView.sizeThatFits(CGSize(width: textView.bounds.width > 0 ? textView.bounds.width : 280, height: .greatestFiniteMagnitude)).height
-        textHeight.constant = min(max(36, ceil(fitting)), maxHeight)
+        textHeight.constant = min(max(Self.height, ceil(fitting)), maxHeight)
         textView.isScrollEnabled = fitting > maxHeight
         updateState()
         if notify { onTextChange?(textView.text) }
@@ -314,7 +335,8 @@ final class ChatInputBar: UIView, UITextViewDelegate {
         placeholder.isHidden = !textView.text.isEmpty
         let hasText = !textView.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         sendButton.isEnabled = hasText || !photos.isEmpty
-        sendButton.alpha = sendButton.isEnabled ? 1 : 0.35
+        // Like Messages, the send arrow appears once there's something to send.
+        sendButton.isHidden = !sendButton.isEnabled
         attachButton.isEnabled = photos.count < Self.maxPhotos
     }
 

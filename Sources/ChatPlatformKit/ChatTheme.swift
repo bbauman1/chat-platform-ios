@@ -25,14 +25,14 @@ public struct ChatTheme {
         background: UIColor = .systemBackground,
         outgoingBubble: UIColor? = nil,
         outgoingText: UIColor = .white,
-        incomingBubble: UIColor = .systemGray5,
+        incomingBubble: UIColor = ChatTheme.messagesGray,
         incomingText: UIColor = .label,
         secondaryText: UIColor = .secondaryLabel,
         failure: UIColor = .systemRed,
         inputBackground: UIColor = .secondarySystemBackground,
         bodyFont: UIFont = .preferredFont(forTextStyle: .body),
         captionFont: UIFont = .preferredFont(forTextStyle: .caption2),
-        bubbleCornerRadius: CGFloat = 18
+        bubbleCornerRadius: CGFloat = 20
     ) {
         self.tint = tint
         self.background = background
@@ -49,6 +49,20 @@ public struct ChatTheme {
     }
 
     public static var `default`: ChatTheme { ChatTheme() }
+
+    /// The incoming bubble's gray in Messages: #E9E9EB, and #262629 in dark mode.
+    public static let messagesGray = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 38 / 255, green: 38 / 255, blue: 41 / 255, alpha: 1)
+            : UIColor(red: 233 / 255, green: 233 / 255, blue: 235 / 255, alpha: 1)
+    }
+
+    /// Names above incoming runs: a lighter gray than `secondaryLabel` in dark mode, like Messages.
+    static let senderName = UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 174 / 255, green: 174 / 255, blue: 178 / 255, alpha: 1)
+            : UIColor(red: 128 / 255, green: 128 / 255, blue: 133 / 255, alpha: 1)
+    }
 
     /// The theme with fonts sized for `traits`' Dynamic Type setting. A
     /// text-style font (`preferredFont`) is resolved again for that size,

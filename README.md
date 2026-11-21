@@ -8,7 +8,7 @@ In Xcode, choose File > Add Package Dependencies and enter
 `https://github.com/bbauman1/chat-platform-ios`, or add it to `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/bbauman1/chat-platform-ios", from: "0.3.0"),
+.package(url: "https://github.com/bbauman1/chat-platform-ios", from: "0.4.0"),
 ```
 
 Then add `ChatPlatformKit` (the chat screen) or only `ChatPlatformCore`

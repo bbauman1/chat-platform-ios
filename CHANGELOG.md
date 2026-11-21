@@ -7,6 +7,26 @@ at release.
 
 ## Unreleased
 
+## 0.4.0 (2026-11-21)
+
+- The group chat look now matches Messages on iOS 26 point for point,
+  traced from a Messages screenshot:
+  - Header: the people who answered sit in a glass circle (the newest as a
+    small avatar in front of the other's corner) over a glass "2 People ›"
+    pill, or the person's name when one person answered, which lists them
+    in a menu. It replaces the title and hangs below the navigation bar.
+  - Bubbles: 20 pt corners, Messages' gray (`ChatTheme.messagesGray`),
+    the tail hanging below the bottom corner instead of out to the side,
+    Messages' padding and line spacing, and line breaks where Messages
+    breaks.
+  - Tapbacks: always the incoming gray, with a ring of the background
+    around the badge and its two dots.
+  - Names, avatars and spacing between runs as in Messages; monogram
+    avatars use Messages' gray gradient.
+  - Composer: a 39.5 pt glass plus button and field, 28 pt from the screen
+    sides, resting on the home indicator area; the send arrow appears once
+    there's something to send.
+
 ## 0.3.0 (2026-11-21)
 
 - Group chat look, like Messages: the AI agent and each teammate are their

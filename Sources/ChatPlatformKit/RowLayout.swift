@@ -34,38 +34,44 @@ struct MessageLayout: Equatable {
 }
 
 struct LayoutMetrics {
-    var sideInset: CGFloat = 12
-    var maxBubbleWidthFraction: CGFloat = 0.78
-    var bubblePadding = UIEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
-    var groupedSpacing: CGFloat = 2
-    var spacing: CGFloat = 8
+    // Sizes from Messages on iOS 26 (a group chat on a 402pt-wide iPhone).
+    var sideInset: CGFloat = 16
+    /// The widest bubble, as a share of the screen's width.
+    var maxBubbleWidthFraction: CGFloat = 0.70
+    var bubblePadding = UIEdgeInsets(top: 9.5, left: 14, bottom: 10, right: 14)
+    var groupedSpacing: CGFloat = 4
+    var spacing: CGFloat = 10
     var imageSpacing: CGFloat = 2
     var maxSingleImageSide: CGFloat = 240
     var statusHeight: CGFloat = 16
     var separatorHeight: CGFloat = 40
     var unreadDividerHeight: CGFloat = 32
-    var typingHeight: CGFloat = 44
+    var typingHeight: CGFloat = 50
     var loadingHeight: CGFloat = 44
     var quotePadding = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
     var quoteSpacing: CGFloat = 3
     var quoteMaxLines = 2
-    var reactionPadding = UIEdgeInsets(top: 3, left: 8, bottom: 3, right: 8)
-    /// How far the badge reaches over the bubble's top edge.
-    var reactionOverlap: CGFloat = 8
-    /// How far the badge sticks out past the bubble's side.
-    var reactionOutset: CGFloat = 12
+    var reactionPadding = UIEdgeInsets(top: 3, left: 10, bottom: 3, right: 10)
+    /// A tapback badge is this tall (a circle for one emoji): its middle
+    /// sits `reactionRise` above the bubble's top, `reactionInset` in from its corner.
+    var reactionSide: CGFloat = 34
+    var reactionRise: CGFloat = 10.5
+    var reactionInset: CGFloat = 3
+    /// The badge's tail: a bigger dot on its edge and a smaller one past it,
+    /// each placed from the middle of the badge's outer end.
+    var reactionDots: [(center: CGPoint, side: CGFloat)] = [
+        (CGPoint(x: 11.7, y: 16), 9), (CGPoint(x: 17.5, y: 23.4), 4.75),
+    ]
+    /// The ring in the background color that cuts the badge out of the bubble under it.
+    var reactionRing: CGFloat = 1.5
     /// An action card's button row, and the card's narrowest width.
     var actionButtonHeight: CGFloat = 44
     var actionMinWidth: CGFloat = 220
-    /// Space between the sender's name line and what's under it.
-    var senderSpacing: CGFloat = 2
+    /// Space between the sender's name line and the bubble under it.
+    var senderSpacing: CGFloat = 4
     /// Group chat avatars beside incoming bubbles, and the gap to the bubble.
-    var avatarSize: CGFloat = 28
-    var avatarGap: CGFloat = 8
-    /// A tapback badge is at least this tall, and never narrower than tall.
-    var reactionMinSide: CGFloat = 30
-    /// The badge's tail dots.
-    var reactionDotSizes: (big: CGFloat, small: CGFloat) = (9, 4.5)
+    var avatarSize: CGFloat = 32
+    var avatarGap: CGFloat = 7
     /// "AI" after the AI's name.
     var aiBadgeColor: UIColor = .systemPurple
 }
@@ -93,7 +99,7 @@ struct RowLayoutCalculator {
         let m = metrics
         // Incoming bubbles move right of the avatars in the group chat look.
         let leading: CGFloat = !row.isOutgoing && row.avatarColumn ? m.avatarSize + m.avatarGap : 0
-        let maxBubble = floor((width - 2 * m.sideInset - leading) * m.maxBubbleWidthFraction)
+        let maxBubble = floor(min(width * m.maxBubbleWidthFraction, width - 2 * m.sideInset - leading))
         let maxText = maxBubble - m.bubblePadding.left - m.bubblePadding.right
         var contentWidth: CGFloat = 0
         var y = m.bubblePadding.top
@@ -133,8 +139,9 @@ struct RowLayoutCalculator {
         var attributed: NSAttributedString?
         if !row.text.isEmpty {
             if !imageFrames.isEmpty { y += 6 }
+            let font = Self.messagesFont(bodyFont)
             let text = MessageMarkdown.render(
-                row.text, style: .init(font: bodyFont, color: textColor, linkColor: linkColor))
+                row.text, style: .init(font: font, color: textColor, linkColor: linkColor))
             let bounds = text.boundingRect(
                 with: CGSize(width: maxText, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
@@ -182,7 +189,7 @@ struct RowLayoutCalculator {
             let bounds = text.boundingRect(
                 with: CGSize(width: maxBubble, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-            let x = m.sideInset + leading + m.bubblePadding.left / 2
+            let x = m.sideInset + leading + m.bubblePadding.left
             sender = CGRect(x: x, y: 0, width: min(ceil(bounds.width), maxBubble), height: ceil(captionFont.lineHeight))
             senderText = text
             top = sender.maxY + m.senderSpacing
@@ -215,7 +222,18 @@ struct RowLayoutCalculator {
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
             reactionSize = CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
             reactionText = text
-            top += max(0, Self.badgeSize(reactionSize, metrics: m).height - m.reactionOverlap)
+            // The badge rises above the bubble; the name and quote above it
+            // stay against the bubble, beside the badge.
+            // Sized from the badge itself, which grows with Dynamic Type.
+            let badgeHeight = Self.badgeSize(reactionSize, metrics: m, circle: false).height
+            let rise = ceil(m.reactionRise + badgeHeight / 2 + m.reactionRing)
+            if top < rise {
+                let shift = rise - top
+                sender = sender.offsetBy(dx: 0, dy: shift)
+                quote = quote.offsetBy(dx: 0, dy: shift)
+                quoteText = quoteText.offsetBy(dx: 0, dy: shift)
+                top = rise
+            }
         }
 
         let bubbleWidth = contentWidth + m.bubblePadding.left + m.bubblePadding.right
@@ -236,29 +254,33 @@ struct RowLayoutCalculator {
         var reactions = CGRect.zero, reactionsText = CGRect.zero
         var reactionDots: [CGRect] = []
         if reactionText != nil {
-            let badge = Self.badgeSize(reactionSize, metrics: m, circle: row.reactions.count == 1 && row.reactions[0].count == 1)
-            var x = row.isOutgoing ? bubble.minX - badge.width + m.reactionOutset : bubble.maxX - m.reactionOutset
+            let circle = row.reactions.count == 1 && row.reactions[0].count == 1
+            let badge = Self.badgeSize(reactionSize, metrics: m, circle: circle)
+            // The badge's outer end is a half circle centered here.
+            let outward: CGFloat = row.isOutgoing ? -1 : 1
+            let r = m.reactionSide / 2
+            let end = CGPoint(
+                x: row.isOutgoing ? bubble.minX + m.reactionInset : bubble.maxX - m.reactionInset,
+                y: bubble.minY - m.reactionRise)
+            var x = row.isOutgoing ? end.x - r : end.x + r - badge.width
             x = min(max(4, x), width - 4 - badge.width)
-            reactions = CGRect(x: x, y: bubble.minY - badge.height + m.reactionOverlap, width: badge.width, height: badge.height)
+            reactions = CGRect(x: x, y: end.y - badge.height / 2, width: badge.width, height: badge.height)
             reactionsText = CGRect(
                 x: reactions.midX - reactionSize.width / 2, y: reactions.midY - reactionSize.height / 2,
                 width: reactionSize.width, height: reactionSize.height)
-            // The tail trails off the corner away from the bubble's middle.
-            let (big, small) = m.reactionDotSizes
-            let outward: CGFloat = row.isOutgoing ? -1 : 1
-            let corner = CGPoint(
-                x: row.isOutgoing ? reactions.minX + badge.height * 0.22 : reactions.maxX - badge.height * 0.22,
-                y: reactions.maxY - badge.height * 0.22)
-            let bigCenter = CGPoint(x: corner.x + outward * big * 0.35, y: corner.y + big * 0.45)
-            let smallCenter = CGPoint(x: bigCenter.x + outward * big * 0.85, y: bigCenter.y + big * 0.8)
-            reactionDots = [
-                CGRect(x: bigCenter.x - big / 2, y: bigCenter.y - big / 2, width: big, height: big),
-                CGRect(x: smallCenter.x - small / 2, y: smallCenter.y - small / 2, width: small, height: small),
-            ]
+            let endX = row.isOutgoing ? reactions.minX + r : reactions.maxX - r
+            reactionDots = m.reactionDots.map { dot in
+                CGRect(
+                    x: endX + outward * dot.center.x - dot.side / 2, y: end.y + dot.center.y - dot.side / 2,
+                    width: dot.side, height: dot.side)
+            }
         }
         var avatar = CGRect.zero
         if row.showsAvatar, !row.isOutgoing {
-            avatar = CGRect(x: m.sideInset, y: bubble.maxY - m.avatarSize, width: m.avatarSize, height: m.avatarSize)
+            // Level with the tail's tip, under the bubble's bottom edge.
+            avatar = CGRect(
+                x: m.sideInset, y: bubble.maxY + BubbleShape.tailDrop - m.avatarSize,
+                width: m.avatarSize, height: m.avatarSize)
         }
 
         var height = bubble.maxY
@@ -278,11 +300,8 @@ struct RowLayoutCalculator {
 
     /// A tapback badge around its text: a circle for one emoji, a pill for more.
     static func badgeSize(_ text: CGSize, metrics m: LayoutMetrics, circle: Bool = true) -> CGSize {
-        let height = max(m.reactionMinSide, text.height + m.reactionPadding.top + m.reactionPadding.bottom)
-        if circle {
-            let side = max(height, text.width + 8)
-            return CGSize(width: side, height: side)
-        }
+        let height = max(m.reactionSide, text.height + m.reactionPadding.top + m.reactionPadding.bottom)
+        if circle { return CGSize(width: height, height: height) }
         return CGSize(width: max(height, text.width + m.reactionPadding.left + m.reactionPadding.right), height: height)
     }
 
@@ -296,7 +315,21 @@ struct RowLayoutCalculator {
 
     /// Quotes use a smaller size of the body font.
     var quoteFont: UIFont { bodyFont.withSize((bodyFont.pointSize * 0.85).rounded()) }
-    var reactionFont: UIFont { UIFont.systemFont(ofSize: (bodyFont.pointSize * 0.85).rounded()) }
+    /// The system body text style carries extra leading on iOS 26 (22 pt
+    /// lines at 17 pt) that Messages doesn't use, so message text is set in
+    /// the plain system font at the same size and traits. A custom font is
+    /// kept as it is.
+    static func messagesFont(_ font: UIFont) -> UIFont {
+        guard font.fontDescriptor.object(forKey: .textStyle) != nil,
+              font.familyName == UIFont.systemFont(ofSize: font.pointSize).familyName
+        else { return font }
+        let plain = UIFont.systemFont(ofSize: font.pointSize)
+        let traits = font.fontDescriptor.symbolicTraits
+        guard !traits.isEmpty, let descriptor = plain.fontDescriptor.withSymbolicTraits(traits) else { return plain }
+        return UIFont(descriptor: descriptor, size: font.pointSize)
+    }
+
+    var reactionFont: UIFont { UIFont.systemFont(ofSize: bodyFont.pointSize) }
 
     /// The quoted text, or a photo mark when it has only images.
     static func quoteText(_ reply: ReplyPreview, font: UIFont, color: UIColor) -> NSAttributedString {

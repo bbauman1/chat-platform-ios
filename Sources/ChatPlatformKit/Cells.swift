@@ -22,6 +22,9 @@ final class MessageCell: UICollectionViewCell {
     let reactionBadge = UIView()
     let reactionLabel = UILabel()
     private let reactionDots = [UIView(), UIView()]
+    /// A ring of the background around the badge and its dots, drawn under
+    /// all three so the ring outlines their union, like Messages.
+    private let reactionRings = [UIView(), UIView(), UIView()]
     /// The sender's avatar beside the last bubble of their run.
     let avatar = AvatarView()
     /// The sender's name above their first message in a run.
@@ -38,13 +41,12 @@ final class MessageCell: UICollectionViewCell {
     var onActionTap: ((Int) -> Void)?
     /// A layer color doesn't follow light and dark by itself.
     private var badgeBorder: UIColor = .systemBackground
+    private var ringWidth: CGFloat = 1.5
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in
-            let border = self.badgeBorder.resolvedColor(with: self.traitCollection).cgColor
-            self.reactionBadge.layer.borderColor = border
-            for dot in self.reactionDots { dot.layer.borderColor = border }
+            for ring in self.reactionRings { ring.backgroundColor = self.badgeBorder }
         }
         replyArrow.contentMode = .center
         replyArrow.alpha = 0
@@ -58,6 +60,8 @@ final class MessageCell: UICollectionViewCell {
         contentView.addSubview(avatar)
         contentView.addSubview(bubble)
         textLabel.numberOfLines = 0
+        // No orphan avoidance: wrap where the layout measured, like Messages.
+        textLabel.lineBreakStrategy = []
         textLabel.isUserInteractionEnabled = true
         textLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(textTapped(_:))))
         // Text and images live inside the bubble, so the long-press menu's
@@ -88,12 +92,14 @@ final class MessageCell: UICollectionViewCell {
         statusLabel.isUserInteractionEnabled = true
         statusLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
         contentView.addSubview(statusLabel)
+        for ring in reactionRings {
+            ring.isUserInteractionEnabled = false
+            contentView.addSubview(ring)
+        }
         for dot in reactionDots.reversed() {
-            dot.layer.borderWidth = 1.5
             contentView.addSubview(dot)
         }
         reactionBadge.layer.cornerCurve = .continuous
-        reactionBadge.layer.borderWidth = 2
         contentView.addSubview(reactionBadge)
         contentView.addSubview(reactionLabel)
         senderLabel.lineBreakMode = .byTruncatingTail
@@ -156,20 +162,21 @@ final class MessageCell: UICollectionViewCell {
         quoteBubble.layer.cornerRadius = min(theme.bubbleCornerRadius, layout.quote.height / 2)
         quoteBubble.accessibilityLabel = strings("a11y.jump_to_quote")
 
-        let mine = row.reactions.contains(where: \.mine)
         reactionBadge.isHidden = layout.reactionsAttributedText == nil
         reactionLabel.isHidden = reactionBadge.isHidden
         reactionLabel.attributedText = layout.reactionsAttributedText
-        let badgeColor = mine ? theme.tint : theme.incomingBubble
-        reactionBadge.backgroundColor = badgeColor
+        // Messages draws every tapback badge in the incoming gray, whoever reacted.
+        reactionBadge.backgroundColor = theme.incomingBubble
         badgeBorder = theme.background
-        let border = theme.background.resolvedColor(with: traitCollection).cgColor
-        reactionBadge.layer.borderColor = border
+        ringWidth = LayoutMetrics().reactionRing
         reactionBadge.layer.cornerRadius = layout.reactions.height / 2
         for (index, dot) in reactionDots.enumerated() {
             dot.isHidden = reactionBadge.isHidden || index >= layout.reactionDots.count
-            dot.backgroundColor = badgeColor
-            dot.layer.borderColor = border
+            dot.backgroundColor = theme.incomingBubble
+        }
+        for (index, ring) in reactionRings.enumerated() {
+            ring.isHidden = index == 0 ? reactionBadge.isHidden : reactionDots[index - 1].isHidden
+            ring.backgroundColor = theme.background
         }
         replyArrow.tintColor = theme.secondaryText
 
@@ -225,6 +232,12 @@ final class MessageCell: UICollectionViewCell {
         for (index, dot) in reactionDots.enumerated() where index < layout.reactionDots.count {
             dot.frame = layout.reactionDots[index]
             dot.layer.cornerRadius = dot.frame.height / 2
+        }
+        let fills = [layout.reactions] + layout.reactionDots
+        for (index, ring) in reactionRings.enumerated() where index < fills.count {
+            ring.frame = fills[index].insetBy(dx: -ringWidth, dy: -ringWidth)
+            ring.layer.cornerRadius = ring.frame.height / 2
+            ring.layer.cornerCurve = .continuous
         }
         senderLabel.frame = layout.sender
         avatar.frame = layout.avatar
@@ -386,7 +399,7 @@ final class TypingCell: UICollectionViewCell {
         contentView.addSubview(bubble)
         for _ in 0..<3 {
             let dot = UIView()
-            dot.layer.cornerRadius = 4
+            dot.layer.cornerRadius = 4.5
             dots.append(dot)
             bubble.addSubview(dot)
         }
@@ -401,10 +414,10 @@ final class TypingCell: UICollectionViewCell {
         bubble.cornerRadius = theme.bubbleCornerRadius
         bubble.tail = .leading
         let x = metrics.sideInset + (avatarColumn ? metrics.avatarSize + metrics.avatarGap : 0)
-        bubble.frame = CGRect(x: x, y: 4, width: 60, height: 36)
+        bubble.frame = CGRect(x: x, y: 4, width: 64, height: 40)
         for (index, dot) in dots.enumerated() {
             dot.backgroundColor = theme.secondaryText
-            dot.frame = CGRect(x: 14 + CGFloat(index) * 12, y: 14, width: 8, height: 8)
+            dot.frame = CGRect(x: 14 + CGFloat(index) * 13, y: 15.5, width: 9, height: 9)
         }
         accessibilityLabel = strings("typing")
         startAnimating()
